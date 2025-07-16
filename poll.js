@@ -27,7 +27,7 @@ const STATUS_MAP = {
   'NDR': 'NDR - 3',
   'Manifested': 'PICKUP SCHEDULED',
   'Pending': 'PICKUP SCHEDULED',
-  'Not Picked': 'PICKUP EXCEPTION - DELHIVERY'
+  'Not Picked': 'PICKUP EXCEPTION - DELHIVERY',
   'Dispatched': 'IN - TRANSIT',
 };
 
