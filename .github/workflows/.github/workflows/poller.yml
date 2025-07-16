@@ -1,0 +1,34 @@
+name: Run Delhivery Poller Every 30 Minutes
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"  # Runs every 30 minutes
+  workflow_dispatch:         # Allows manual run from GitHub UI
+
+jobs:
+  run-poller:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run poller script
+        run: node poll.js
+        env:
+          DELHIVERY_TOKEN: ${{ secrets.DELHIVERY_TOKEN }}
+          JIRA_DOMAIN: ${{ secrets.JIRA_DOMAIN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT: ${{ secrets.JIRA_PROJECT }}
+          TRACKING_FIELD: ${{ secrets.TRACKING_FIELD }}
+          CUSTOMFIELD_DISPATCH_DATE: ${{ secrets.CUSTOMFIELD_DISPATCH_DATE }}
+          CUSTOMFIELD_DELIVERY_DATE: ${{ secrets.CUSTOMFIELD_DELIVERY_DATE }}
+          CUSTOMFIELD_RTO_DATE: ${{ secrets.CUSTOMFIELD_RTO_DATE }}
