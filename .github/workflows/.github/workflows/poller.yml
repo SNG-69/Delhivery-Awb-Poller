@@ -2,8 +2,8 @@ name: Run Delhivery Poller Every 30 Minutes
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
-  workflow_dispatch:
+    - cron: "*/30 * * * *"  # Runs every 30 minutes
+  workflow_dispatch:         # Allows manual run from GitHub UI
 
 jobs:
   run-poller:
