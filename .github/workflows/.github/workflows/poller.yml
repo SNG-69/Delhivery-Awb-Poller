@@ -2,8 +2,8 @@ name: Run Delhivery Poller Every 30 Minutes
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # Every 30 minutes
-  workflow_dispatch:         # Allow manual runs
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
 jobs:
   run-poller:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 18
