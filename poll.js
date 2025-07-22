@@ -25,11 +25,12 @@ const STATUS_MAP = {
   'In Transit For Return': 'RTO IN - TRANSIT',
   'RTO - Returned': 'RTO DELIVERED',
   'Cancelled': 'PICKUP EXCEPTION - DELHIVERY',
+  'Shipment delivery cancelled via OTP': 'PICKUP EXCEPTION - DELHIVERY',  // New custom status
   'NDR': 'NDR - 3',
   'Manifested': 'PICKUP SCHEDULED',
   'Pending': 'PICKUP SCHEDULED',
   'Not Picked': 'PICKUP EXCEPTION - DELHIVERY',
-  'Dispatched': 'IN - TRANSIT',
+  'Dispatched': 'IN - TRANSIT'
 };
 
 const extractAWB = (trackingFieldValue) => {
