@@ -23,6 +23,8 @@ const STATUS_MAP = {
   'RTO': 'RTO IN - TRANSIT',
   'RTO - In Transit': 'RTO IN - TRANSIT',
   'In Transit For Return': 'RTO IN - TRANSIT',
+  'Delayed' : 'IN - TRANSIT',
+  'On Time' : 'IN - TRANSIT',
   'RTO - Returned': 'RTO DELIVERED',
   'Cancelled': 'PICKUP EXCEPTION - DELHIVERY',
   'Shipment delivery cancelled via OTP': 'PICKUP EXCEPTION - DELHIVERY',  // New custom status
