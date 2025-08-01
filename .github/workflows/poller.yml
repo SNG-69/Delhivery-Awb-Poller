@@ -1,8 +1,8 @@
-name: Run Delhivery Poller Every 5 Minutes
+name: Run Delhivery Poller Every 35 Minutes
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
