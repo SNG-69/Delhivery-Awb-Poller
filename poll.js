@@ -27,7 +27,7 @@ const STATUS_MAP = {
   'On Time' : 'IN - TRANSIT',
   'RTO - Returned': 'RTO DELIVERED',
   'Cancelled': 'PICKUP EXCEPTION - DELHIVERY',
-  'Shipment delivery cancelled via OTP': 'PICKUP EXCEPTION - DELHIVERY',  // New custom status
+  'Shipment delivery cancelled via OTP': 'PICKUP EXCEPTION - DELHIVERY',
   'NDR': 'NDR - 3',
   'Manifested': 'PICKUP SCHEDULED',
   'Pending': 'PICKUP SCHEDULED',
@@ -171,9 +171,13 @@ const run = async () => {
   const issues = await getJiraIssues();
   if (!issues) return;
 
+  let updated = 0;
+  let skipped = 0;
+
   for (const issue of issues) {
     const trackingFieldValue = issue.fields[TRACKING_FIELD];
     const awb = extractAWB(trackingFieldValue);
+    const currentStatus = issue.fields.status?.name;
 
     if (!awb) {
       console.log(`⚠️ No valid AWB for ${issue.key}`);
@@ -187,6 +191,12 @@ const run = async () => {
     const updatedStatus = STATUS_MAP[status];
     if (!updatedStatus) {
       console.log(`⚠️ Unknown status "${status}" for AWB ${awb}`);
+      continue;
+    }
+
+    if (currentStatus === updatedStatus) {
+      console.log(`⏩ Skipping ${issue.key} — already in status "${updatedStatus}"`);
+      skipped++;
       continue;
     }
 
@@ -212,17 +222,16 @@ const run = async () => {
       case 'DELIVERED':
         comment = `Order successfully delivered on ${new Date().toISOString()}`;
         break;
-      default:
-        break;
     }
 
     await updateJira(issue.key, updatedStatus, customFields, comment);
+    updated++;
   }
 
   console.log(`✅ Sync finished at ${new Date().toISOString()}`);
+  console.log(`📊 Summary: ${updated} updated, ${skipped} skipped`);
 };
 
-// --- Run Once ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection:', reason);
 });
@@ -231,8 +240,7 @@ process.on('uncaughtException', (err) => {
   console.error('💥 Uncaught Exception:', err);
 });
 
-run()
-  .catch(err => {
-    console.error('💥 Script failed:', err);
-    process.exit(1);
-  });
+run().catch(err => {
+  console.error('💥 Script failed:', err);
+  process.exit(1);
+});
