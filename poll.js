@@ -78,7 +78,7 @@ const getJiraIssues = async () => {
   console.log('📥 Fetching PICKUP SCHEDULED issues...');
   const pickupIssues = await retry(async () => {
     const res = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-      params: { jql: jqlPickup, maxResults: 1000 },
+      params: { jql: jqlPickup, maxResults: 1001 },
       auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
     });
     return res.data.issues || [];
@@ -87,7 +87,7 @@ const getJiraIssues = async () => {
   console.log('📥 Fetching other eligible issues...');
   const otherIssues = await retry(async () => {
     const res = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-      params: { jql: jqlOthers, maxResults: 1000 },
+      params: { jql: jqlOthers, maxResults: 1001 },
       auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
     });
     return res.data.issues || [];
