@@ -87,7 +87,7 @@ const getJiraIssues = async () => {
   console.log('📥 Fetching other eligible issues...');
   const otherIssues = await retry(async () => {
     const res = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-      params: { jql: jqlOthers, maxResults: 500 },
+      params: { jql: jqlOthers, maxResults: 1000 },
       auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
     });
     return res.data.issues || [];
