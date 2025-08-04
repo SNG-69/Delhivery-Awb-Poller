@@ -2,6 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const dayjs = require('dayjs');
 
+// --- Environment Variables ---
 const DELHIVERY_TOKEN = process.env.DELHIVERY_TOKEN;
 const JIRA_DOMAIN = process.env.JIRA_DOMAIN;
 const JIRA_EMAIL = process.env.JIRA_EMAIL;
@@ -12,7 +13,6 @@ const TRACKING_FIELD = process.env.TRACKING_FIELD;
 const DISPATCH_DATE_FIELD = process.env.CUSTOMFIELD_DISPATCH_DATE;
 const DELIVERY_DATE_FIELD = process.env.CUSTOMFIELD_DELIVERY_DATE;
 const RTO_DELIVERED_DATE_FIELD = process.env.CUSTOMFIELD_RTO_DATE;
-
 const POST_DELIVERY_ASSIGNEE = '712020:d710d4e8-270f-4d7a-b65a-7303f71783fb';
 
 const STATUS_MAP = {
@@ -23,9 +23,9 @@ const STATUS_MAP = {
   'RTO': 'RTO IN - TRANSIT',
   'RTO - In Transit': 'RTO IN - TRANSIT',
   'In Transit For Return': 'RTO IN - TRANSIT',
-  'Delayed' : 'IN - TRANSIT',
-  'DELAYED' : 'IN - TRANSIT',
-  'On Time' : 'IN - TRANSIT',
+  'Delayed': 'IN - TRANSIT',
+  'DELAYED': 'IN - TRANSIT',
+  'On Time': 'IN - TRANSIT',
   'RTO - Returned': 'RTO DELIVERED',
   'Cancelled': 'PICKUP EXCEPTION - DELHIVERY',
   'Shipment delivery cancelled via OTP': 'PICKUP EXCEPTION - DELHIVERY',
@@ -36,6 +36,7 @@ const STATUS_MAP = {
   'Dispatched': 'IN - TRANSIT'
 };
 
+// --- Utility Functions ---
 const extractAWB = (trackingFieldValue) => {
   if (!trackingFieldValue) return null;
   const regexes = [
@@ -72,27 +73,37 @@ const getTracking = async (awb) => {
   });
 };
 
+const fetchAllIssues = async (jql) => {
+  let allIssues = [];
+  let startAt = 0;
+  const maxResults = 100;
+
+  while (true) {
+    const res = await retry(async () => {
+      const response = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
+        params: { jql, startAt, maxResults },
+        auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
+      });
+      return response.data;
+    });
+
+    allIssues.push(...res.issues);
+    if (res.issues.length < maxResults) break;
+    startAt += maxResults;
+  }
+
+  return allIssues;
+};
+
 const getJiraIssues = async () => {
   const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
   const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status NOT IN ("DELIVERED", "RTO DELIVERED", "PICKUP SCHEDULED") ORDER BY updated DESC`;
 
   console.log('📥 Fetching PICKUP SCHEDULED issues...');
-  const pickupIssues = await retry(async () => {
-    const res = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-      params: { jql: jqlPickup, maxResults: 1001 },
-      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
-    });
-    return res.data.issues || [];
-  });
+  const pickupIssues = await fetchAllIssues(jqlPickup);
 
   console.log('📥 Fetching other eligible issues...');
-  const otherIssues = await retry(async () => {
-    const res = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-      params: { jql: jqlOthers, maxResults: 1001 },
-      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
-    });
-    return res.data.issues || [];
-  });
+  const otherIssues = await fetchAllIssues(jqlOthers);
 
   return [...pickupIssues, ...otherIssues];
 };
@@ -106,10 +117,7 @@ const postCommentADF = async (issueKey, commentText) => {
       version: 1,
       content: [{
         type: 'paragraph',
-        content: [{
-          type: 'text',
-          text: commentText
-        }]
+        content: [{ type: 'text', text: commentText }]
       }]
     }
   };
@@ -167,6 +175,7 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
   }
 };
 
+// --- Main Runner ---
 const run = async () => {
   console.log(`🔄 Sync started at ${new Date().toISOString()}`);
   const issues = await getJiraIssues();
@@ -209,20 +218,15 @@ const run = async () => {
     let comment = null;
     switch (updatedStatus) {
       case 'IN - TRANSIT':
-        comment = `Order is now in transit as of ${new Date().toISOString()}`;
-        break;
+        comment = `Order is now in transit as of ${new Date().toISOString()}`; break;
       case 'NDR - 3':
-        comment = `Order marked as NDR (Non-Delivery Report) as of ${new Date().toISOString()}`;
-        break;
+        comment = `Order marked as NDR (Non-Delivery Report) as of ${new Date().toISOString()}`; break;
       case 'RTO IN - TRANSIT':
-        comment = `Order is now RTO in transit as of ${new Date().toISOString()}`;
-        break;
+        comment = `Order is now RTO in transit as of ${new Date().toISOString()}`; break;
       case 'RTO DELIVERED':
-        comment = `Order RTO delivered as of ${new Date().toISOString()}`;
-        break;
+        comment = `Order RTO delivered as of ${new Date().toISOString()}`; break;
       case 'DELIVERED':
-        comment = `Order successfully delivered on ${new Date().toISOString()}`;
-        break;
+        comment = `Order successfully delivered on ${new Date().toISOString()}`; break;
     }
 
     await updateJira(issue.key, updatedStatus, customFields, comment);
@@ -233,6 +237,7 @@ const run = async () => {
   console.log(`📊 Summary: ${updated} updated, ${skipped} skipped`);
 };
 
+// --- Error Handling ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection:', reason);
 });
