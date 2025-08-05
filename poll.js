@@ -107,6 +107,10 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
+  if (instructions.includes("shipment received at facility")) {
+    return "IN - TRANSIT";
+  }
+
   return STATUS_MAP[status] || null;
 };
 
