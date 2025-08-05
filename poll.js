@@ -60,7 +60,7 @@ const retry = async (fn, retries = 3, delayMs = 1000) => {
       if (attempt < retries) await new Promise(r => setTimeout(r, delayMs));
     }
   }
-  console.error(❌ All ${retries} attempts failed);
+  console.error(`❌ All ${retries} attempts failed`);
   return null;
 };
 
