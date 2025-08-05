@@ -1,4 +1,3 @@
-// ✅ Delhivery → Jira Sync with Updated interpretStatus Logic
 require('dotenv').config();
 const axios = require('axios');
 const dayjs = require('dayjs');
@@ -37,6 +36,7 @@ const STATUS_MAP = {
   'Dispatched': 'IN - TRANSIT'
 };
 
+// --- Extract AWB ---
 const extractAWB = (trackingFieldValue) => {
   if (!trackingFieldValue) return null;
   const regexes = [
@@ -51,6 +51,7 @@ const extractAWB = (trackingFieldValue) => {
   return null;
 };
 
+// --- Retry Wrapper ---
 const retry = async (fn, retries = 3, delayMs = 1000) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -64,15 +65,17 @@ const retry = async (fn, retries = 3, delayMs = 1000) => {
   return null;
 };
 
+// --- Delhivery API Call ---
 const getTracking = async (awb) => {
   return await retry(async () => {
-    const res = await axios.get(https://track.delhivery.com/api/v1/packages/json/?waybill=${awb}, {
-      headers: { Authorization: Token ${DELHIVERY_TOKEN} }
+    const res = await axios.get(`https://track.delhivery.com/api/v1/packages/json/?waybill=${awb}`, {
+      headers: { Authorization: `Token ${DELHIVERY_TOKEN}` }
     });
     return res.data?.ShipmentData?.[0]?.Shipment || null;
   });
 };
 
+// --- Jira Fetch ---
 const fetchAllIssues = async (jql) => {
   let allIssues = [];
   let startAt = 0;
@@ -80,7 +83,7 @@ const fetchAllIssues = async (jql) => {
 
   while (true) {
     const res = await retry(async () => {
-      const response = await axios.get(${JIRA_DOMAIN}/rest/api/3/search, {
+      const response = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
         params: { jql, startAt, maxResults },
         auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
       });
@@ -95,25 +98,22 @@ const fetchAllIssues = async (jql) => {
   return allIssues;
 };
 
+// --- Interpret Delhivery Status ---
 const interpretStatus = (tracking) => {
   const status = tracking.Status?.Status;
   const instructions = tracking.Status?.Instructions?.toLowerCase() || "";
-  const location = tracking.Status?.StatusLocation?.toLowerCase() || "";
 
   if (instructions.includes("consignee will collect")) {
     return "IN - TRANSIT";
   }
 
-  if (status === "Pending" && location.includes("origin")) {
-    return "PICKUP SCHEDULED";
-  }
-
   return STATUS_MAP[status] || null;
 };
 
+// --- Get Jira Issues ---
 const getJiraIssues = async () => {
-  const jqlPickup = project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC;
-  const jqlOthers = project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status NOT IN ("DELIVERED", "RTO DELIVERED", "PICKUP SCHEDULED") ORDER BY updated DESC;
+  const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
+  const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status NOT IN ("DELIVERED", "RTO DELIVERED", "PICKUP SCHEDULED") ORDER BY updated DESC`;
 
   console.log('📥 Fetching PICKUP SCHEDULED issues...');
   const pickupIssues = await fetchAllIssues(jqlPickup);
@@ -124,6 +124,7 @@ const getJiraIssues = async () => {
   return [...pickupIssues, ...otherIssues];
 };
 
+// --- Comment on Jira ---
 const postCommentADF = async (issueKey, commentText) => {
   if (!commentText) return;
   const commentPayload = {
@@ -135,38 +136,38 @@ const postCommentADF = async (issueKey, commentText) => {
   };
 
   try {
-    await axios.post(${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/comment, commentPayload, {
+    await axios.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/comment`, commentPayload, {
       auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
     });
-    console.log(💬 Comment added to ${issueKey});
+    console.log(`💬 Comment added to ${issueKey}`);
   } catch (err) {
-    console.error(❌ Failed to add comment to ${issueKey}:, err.response?.data || err.message);
+    console.error(`❌ Failed to add comment to ${issueKey}:`, err.response?.data || err.message);
   }
 };
 
+// --- Update Jira ---
 const updateJira = async (issueKey, newStatus, customFields = {}, comment = null) => {
   try {
-    const transitionRes = await axios.get(${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions, {
+    const transitionRes = await axios.get(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
       auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
     });
 
     const transition = transitionRes.data.transitions.find(t => t.to.name.toLowerCase() === newStatus.toLowerCase());
 
     if (transition) {
-      await axios.post(${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions, {
+      await axios.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
         transition: { id: transition.id }
       }, { auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN } });
-      console.log(✅ Status updated to "${newStatus}" for ${issueKey});
+      console.log(`✅ Status updated to "${newStatus}" for ${issueKey}`);
     } else {
-      const available = transitionRes.data.transitions.map(t => t.to.name).join(', ');
-      console.log(⚠️ No matching transition for "${newStatus}" on ${issueKey}. Available targets: ${available});
+      console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}`);
     }
 
     if (Object.keys(customFields).length > 0) {
-      await axios.put(${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}, {
+      await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}`, {
         fields: customFields
       }, { auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN } });
-      console.log(🛠️ Custom fields updated for ${issueKey});
+      console.log(`🛠️ Custom fields updated for ${issueKey}`);
     }
 
     if (comment) {
@@ -174,19 +175,20 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
     }
 
     if (["DELIVERED", "RTO DELIVERED"].includes(newStatus)) {
-      await axios.put(${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/assignee, {
+      await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/assignee`, {
         accountId: POST_DELIVERY_ASSIGNEE
       }, { auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN } });
-      console.log(👤 Assigned ${issueKey} to post-delivery assignee);
+      console.log(`👤 Assigned ${issueKey} to post-delivery assignee`);
     }
 
   } catch (err) {
-    console.error(❌ Failed to update JIRA ${issueKey}:, err.response?.data || err.message);
+    console.error(`❌ Failed to update JIRA ${issueKey}:`, err.response?.data || err.message);
   }
 };
 
+// --- Main Execution ---
 const run = async () => {
-  console.log(🔄 Sync started at ${new Date().toISOString()});
+  console.log(`🔄 Sync started at ${new Date().toISOString()}`);
   const issues = await getJiraIssues();
   if (!issues) return;
 
@@ -199,7 +201,7 @@ const run = async () => {
     const currentStatus = issue.fields.status?.name;
 
     if (!awb) {
-      console.log(⚠️ No valid AWB for ${issue.key});
+      console.log(`⚠️ No valid AWB for ${issue.key}`);
       continue;
     }
 
@@ -208,12 +210,12 @@ const run = async () => {
 
     const updatedStatus = interpretStatus(tracking);
     if (!updatedStatus) {
-      console.log(⚠️ Unknown status "${tracking.Status?.Status}" for AWB ${awb});
+      console.log(`⚠️ Unknown status "${tracking.Status?.Status}" for AWB ${awb}`);
       continue;
     }
 
     if (currentStatus === updatedStatus) {
-      console.log(⏩ Skipping ${issue.key} — already in status "${updatedStatus}");
+      console.log(`⏩ Skipping ${issue.key} — already in status "${updatedStatus}"`);
       skipped++;
       continue;
     }
@@ -225,19 +227,19 @@ const run = async () => {
 
     let comment = null;
     switch (updatedStatus) {
-      case 'IN - TRANSIT': comment = Order is now in transit as of ${new Date().toISOString()}; break;
-      case 'NDR - 3': comment = Order marked as NDR (Non-Delivery Report) as of ${new Date().toISOString()}; break;
-      case 'RTO IN - TRANSIT': comment = Order is now RTO in transit as of ${new Date().toISOString()}; break;
-      case 'RTO DELIVERED': comment = Order RTO delivered as of ${new Date().toISOString()}; break;
-      case 'DELIVERED': comment = Order successfully delivered on ${new Date().toISOString()}; break;
+      case 'IN - TRANSIT': comment = `Order is now in transit as of ${new Date().toISOString()}`; break;
+      case 'NDR - 3': comment = `Order marked as NDR (Non-Delivery Report) as of ${new Date().toISOString()}`; break;
+      case 'RTO IN - TRANSIT': comment = `Order is now RTO in transit as of ${new Date().toISOString()}`; break;
+      case 'RTO DELIVERED': comment = `Order RTO delivered as of ${new Date().toISOString()}`; break;
+      case 'DELIVERED': comment = `Order successfully delivered on ${new Date().toISOString()}`; break;
     }
 
     await updateJira(issue.key, updatedStatus, customFields, comment);
     updated++;
   }
 
-  console.log(✅ Sync finished at ${new Date().toISOString()});
-  console.log(📊 Summary: ${updated} updated, ${skipped} skipped);
+  console.log(`✅ Sync finished at ${new Date().toISOString()}`);
+  console.log(`📊 Summary: ${updated} updated, ${skipped} skipped`);
 };
 
 process.on('unhandledRejection', (reason) => {
