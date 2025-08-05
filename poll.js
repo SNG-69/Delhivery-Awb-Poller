@@ -56,7 +56,7 @@ const retry = async (fn, retries = 3, delayMs = 1000) => {
     try {
       return await fn();
     } catch (err) {
-      console.warn(⚠️ Attempt ${attempt} failed: ${err.message});
+      console.warn(`⚠️ Attempt ${attempt} failed: ${err.message}`);
       if (attempt < retries) await new Promise(r => setTimeout(r, delayMs));
     }
   }
