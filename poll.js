@@ -143,6 +143,10 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
+  if (instructions.includes("RETURN Accepted")) {
+    return "RTO DELIVERED";
+  }
+
   return STATUS_MAP[status] || null;
 };
 
