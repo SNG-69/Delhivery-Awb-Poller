@@ -131,6 +131,10 @@ const interpretStatus = (tracking) => {
     return "RTO IN - TRANSIT";
   }
 
+  if (instructions.includes("Code verified cancellation")) {
+    return "RTO IN - TRANSIT";
+  }
+
   if (instructions.includes("Maximum attempts reached")) {
     return "IN - TRANSIT";
   }
