@@ -115,6 +115,10 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
+  if (instructions.includes("Agent remark incorrect")) {
+    return "IN - TRANSIT";
+  }
+
   if (instructions.includes("Arriving Today")) {
     return "IN - TRANSIT";
   }
