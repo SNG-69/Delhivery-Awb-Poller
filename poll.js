@@ -135,6 +135,10 @@ const interpretStatus = (tracking) => {
     return "RTO IN - TRANSIT";
   }
 
+  if (instructions.includes("Dispatched for RTO")) {
+    return "RTO IN - TRANSIT";
+  }
+
   if (instructions.includes("Not attempted")) {
     return "NDR - 3";
   }
