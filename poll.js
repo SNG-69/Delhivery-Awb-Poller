@@ -111,6 +111,10 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
+  if (instructions.includes("Consignee Unavailable")) {
+    return "IN - TRANSIT";
+  }
+
   if (instructions.includes("Arriving Today")) {
     return "IN - TRANSIT";
   }
