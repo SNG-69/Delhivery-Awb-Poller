@@ -123,6 +123,10 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
+  if (instructions.includes("Office/Institute closed")) {
+    return "IN - TRANSIT";
+  }
+
   if (instructions.includes("Maximum attempts reached")) {
     return "IN - TRANSIT";
   }
