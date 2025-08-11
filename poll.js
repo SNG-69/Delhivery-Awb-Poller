@@ -79,7 +79,7 @@ const getTracking = async (awb) => {
 const fetchAllIssues = async (jql) => {
   let allIssues = [];
   let startAt = 0;
-  const maxResults = 300;
+  const maxResults = 500;
 
   while (true) {
     const res = await retry(async () => {
