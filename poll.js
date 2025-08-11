@@ -127,6 +127,10 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
+  if (instructions.includes("Whatsapp verified cancellation")) {
+    return "RTO IN - TRANSIT";
+  }
+
   if (instructions.includes("Maximum attempts reached")) {
     return "IN - TRANSIT";
   }
