@@ -100,57 +100,34 @@ const fetchAllIssues = async (jql) => {
 
 // --- Interpret Delhivery Status ---
 const interpretStatus = (tracking) => {
-  const status = tracking.Status?.Status;
-  const instructions = tracking.Status?.Instructions?.toLowerCase() || "";
+  const statusObj = tracking?.Status || {};
+  const status = (statusObj.Status || "").trim();                     // e.g., "In Transit"
+  const instructions = (statusObj.Instructions || "").toLowerCase();  // normalized
+  const statusType = (statusObj.StatusType || statusObj.ScanType || "").toUpperCase(); // e.g., "RT"
 
-  if (instructions.includes("consignee will collect")) {
-    return "IN - TRANSIT";
-  }
+  // 1) Hard terminal checks first
+  if (tracking.DeliveryDate) return "DELIVERED";
+  if (tracking.ReturnedDate) return "RTO DELIVERED";
 
-  if (instructions.includes("shipment received at facility")) {
-    return "IN - TRANSIT";
-  }
+  // 2) Return flow has priority over generic "In Transit"
+  // Delhivery uses codes like "RT" to indicate RTO leg
+  if (statusType === "RT") return "RTO IN - TRANSIT";
 
-  if (instructions.includes("consignee unavailable")) {
-    return "IN - TRANSIT";
-  }
+  // 3) Heuristic instruction checks (lowercased)
+  if (instructions.includes("consignee will collect")) return "IN - TRANSIT";
+  if (instructions.includes("shipment received at facility")) return "IN - TRANSIT";
+  if (instructions.includes("consignee unavailable")) return "IN - TRANSIT";
+  if (instructions.includes("agent remark incorrect")) return "IN - TRANSIT";
+  if (instructions.includes("arriving today")) return "IN - TRANSIT";
+  if (instructions.includes("office/institute closed")) return "IN - TRANSIT";
+  if (instructions.includes("whatsapp verified cancellation")) return "RTO IN - TRANSIT";
+  if (instructions.includes("code verified cancellation")) return "RTO IN - TRANSIT";
+  if (instructions.includes("dispatched for rto")) return "RTO IN - TRANSIT";
+  if (instructions.includes("not attempted")) return "NDR - 3";
+  if (instructions.includes("maximum attempts reached")) return "IN - TRANSIT";
+  if (instructions.includes("return accepted")) return "RTO DELIVERED";
 
-  if (instructions.includes("agent remark incorrect")) {
-    return "IN - TRANSIT";
-  }
-
-  if (instructions.includes("arriving today")) {
-    return "IN - TRANSIT";
-  }
-
-  if (instructions.includes("office/institute closed")) {
-    return "IN - TRANSIT";
-  }
-
-  if (instructions.includes("whatsapp verified cancellation")) {
-    return "RTO IN - TRANSIT";
-  }
-
-  if (instructions.includes("code verified cancellation")) {
-    return "RTO IN - TRANSIT";
-  }
-
-  if (instructions.includes("dispatched for rto")) {
-    return "RTO IN - TRANSIT";
-  }
-
-  if (instructions.includes("not attempted")) {
-    return "NDR - 3";
-  }
-
-  if (instructions.includes("maximum attempts reached")) {
-    return "IN - TRANSIT";
-  }
-
-  if (instructions.includes("return accepted")) {
-    return "RTO DELIVERED";
-  }
-
+  // 4) Fallback to your explicit STATUS_MAP mapping
   return STATUS_MAP[status] || null;
 };
 
