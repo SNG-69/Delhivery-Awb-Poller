@@ -125,19 +125,23 @@ const getTracking = async (awb) => {
 const fetchAllIssues = async (jql) => {
   const all = [];
   let startAt = 0;
-  const maxResults = 500;
+  const pageSize = 50; // safe for Jira Cloud (cap varies by site)
+
   while (true) {
-    const res = await retry(async () => {
-      const { data } = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-        params: { jql, startAt, maxResults },
-        auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
-      });
-      return data;
+    const { data } = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
+      params: { jql, startAt, maxResults: pageSize },
+      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
     });
-    if (!res || !Array.isArray(res.issues)) break;
-    all.push(...res.issues);
-    if (res.issues.length < maxResults) break;
-    startAt += maxResults;
+
+    const issues = data.issues || [];
+    all.push(...issues);
+
+    // compute next page from the response, not our request
+    const nextStart = (data.startAt || 0) + issues.length;
+    const total = data.total ?? nextStart;
+
+    if (issues.length === 0 || nextStart >= total) break;
+    startAt = nextStart;
   }
   return all;
 };
