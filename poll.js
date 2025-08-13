@@ -100,20 +100,30 @@ const fetchAllIssues = async (jql) => {
 
 // --- Interpret Delhivery Status ---
 const interpretStatus = (tracking) => {
-  const statusObj = tracking?.Status || {};
-  const status = (statusObj.Status || "").trim();                     // e.g., "In Transit"
-  const instructions = (statusObj.Instructions || "").toLowerCase();  // normalized
-  const statusType = (statusObj.StatusType || statusObj.ScanType || "").toUpperCase(); // e.g., "RT"
+  const s = tracking?.Status || {};
+  const status = (s.Status || "").trim();                       // e.g., "In Transit"
+  const instructions = (s.Instructions || "").toLowerCase();    // normalized
+  const statusType = (s.StatusType || s.ScanType || "").toUpperCase(); // e.g., "RT"
 
-  // 1) Hard terminal checks first
+  // 0) Terminal checks: dates beat everything
   if (tracking.DeliveryDate) return "DELIVERED";
   if (tracking.ReturnedDate) return "RTO DELIVERED";
 
-  // 2) Return flow has priority over generic "In Transit"
-  // Delhivery uses codes like "RT" to indicate RTO leg
-  if (statusType === "RT") return "RTO IN - TRANSIT";
+  // Helper: decide if this leg is RTO
+  const isReturnFlow = (() => {
+    if (["RT", "RTO", "RET"].includes(statusType)) return true;
+    const statusLc = status.toLowerCase();
+    if (statusLc.includes("rto")) return true;                 // e.g., "RTO - In Transit"
+    if (instructions.includes("rto")) return true;             // any instruction explicitly mentioning RTO
+    return false;
+  })();
 
-  // 3) Heuristic instruction checks (lowercased)
+  // 1) Instruction heuristics with correct scoping
+  if (instructions.includes("bag added to trip")) {
+    // Only mark RTO IN - TRANSIT if it's clearly an RTO leg
+    return isReturnFlow ? "RTO IN - TRANSIT" : "IN - TRANSIT";
+  }
+
   if (instructions.includes("consignee will collect")) return "IN - TRANSIT";
   if (instructions.includes("shipment received at facility")) return "IN - TRANSIT";
   if (instructions.includes("consignee unavailable")) return "IN - TRANSIT";
@@ -126,9 +136,11 @@ const interpretStatus = (tracking) => {
   if (instructions.includes("not attempted")) return "NDR - 3";
   if (instructions.includes("maximum attempts reached")) return "IN - TRANSIT";
   if (instructions.includes("return accepted")) return "RTO DELIVERED";
-  if (instructions.includes("bag added to trip")) return "RTO IN - TRANSIT";
 
-  // 4) Fallback to your explicit STATUS_MAP mapping
+  // 2) If we know it's an RTO leg (from type/strings), prefer RTO in-transit
+  if (isReturnFlow) return "RTO IN - TRANSIT";
+
+  // 3) Fallback to explicit status mapping
   return STATUS_MAP[status] || null;
 };
 
