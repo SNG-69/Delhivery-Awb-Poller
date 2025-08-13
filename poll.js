@@ -105,40 +105,51 @@ const interpretStatus = (tracking) => {
   const instructions = (s.Instructions || "").toLowerCase();
   const statusType = (s.StatusType || s.ScanType || "").toUpperCase();
 
-  // Terminal RTO first
+  // Look at recent scans too (some payloads lag in Status.*)
+  const scans = Array.isArray(tracking.Scans) ? tracking.Scans : [];
+  const hasRTScan = scans.slice(-8).some(x =>
+    (x?.ScanDetail?.ScanType || "").toUpperCase() === "RT"
+  );
+
+  // RTO terminal beats everything
   if (tracking.ReturnedDate) return "RTO DELIVERED";
 
-  // Decide return leg (RTO) — overrides forward delivery artefacts
+  // Decide RTO leg (return flow)
   const isReturnFlow =
     ["RT", "RTO", "RET"].includes(statusType) ||
-    Boolean(tracking.ReverseInTransit) ||
-    Boolean(tracking.RTOStartedDate) ||
+    !!tracking.ReverseInTransit ||
+    !!tracking.RTOStartedDate ||
+    hasRTScan ||
     status.toLowerCase().includes("rto") ||
     instructions.includes("rto");
 
   if (isReturnFlow) return "RTO IN - TRANSIT";
 
-  // Only then consider forward delivered as terminal
+  // Forward terminal next
   if (tracking.DeliveryDate) return "DELIVERED";
 
-  // Heuristics
-  if (instructions.includes("bag added to trip")) return "IN - TRANSIT";
+  // Heuristics (forward)
   if (instructions.includes("consignee will collect")) return "IN - TRANSIT";
   if (instructions.includes("shipment received at facility")) return "IN - TRANSIT";
   if (instructions.includes("consignee unavailable")) return "IN - TRANSIT";
   if (instructions.includes("agent remark incorrect")) return "IN - TRANSIT";
   if (instructions.includes("arriving today")) return "IN - TRANSIT";
   if (instructions.includes("office/institute closed")) return "IN - TRANSIT";
+
+  // Heuristics that imply RTO (keep these)
   if (instructions.includes("whatsapp verified cancellation")) return "RTO IN - TRANSIT";
   if (instructions.includes("code verified cancellation")) return "RTO IN - TRANSIT";
   if (instructions.includes("dispatched for rto")) return "RTO IN - TRANSIT";
+  if (instructions.includes("return accepted")) return "RTO DELIVERED";
+
+  // NDR etc.
   if (instructions.includes("not attempted")) return "NDR - 3";
   if (instructions.includes("maximum attempts reached")) return "IN - TRANSIT";
-  if (instructions.includes("return accepted")) return "RTO DELIVERED";
 
   // Fallback to explicit map
   return STATUS_MAP[status] || null;
 };
+
 
 // --- Get Jira Issues ---
 const getJiraIssues = async () => {
