@@ -157,7 +157,7 @@ const interpretStatus = (tracking) => {
 // --- Get Jira Issues ---
 const getJiraIssues = async () => {
   const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
-  const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status NOT IN ("DELIVERED", "RTO DELIVERED", "PICKUP SCHEDULED") ORDER BY updated DESC`;
+  const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "2025-07-01" AND status NOT IN ("RTO DELIVERED", "PICKUP SCHEDULED") ORDER BY updated DESC`;
 
   console.log('📥 Fetching PICKUP SCHEDULED issues...');
   const pickupIssues = await fetchAllIssues(jqlPickup);
