@@ -18,6 +18,8 @@ const RTO_DELIVERED_DATE_FIELD = process.env.CUSTOMFIELD_RTO_DATE; // date
 const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d710d4e8-270f-4d7a-b65a-7303f71783fb';
 
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 60);
+const DEBUG_ISSUE_KEY = process.env.DEBUG_ISSUE_KEY || '';   // e.g. INST-123 to isolate one issue
+const LOG_TRANSITIONS = process.env.LOG_TRANSITIONS === '1';  // set to 1 to log available transitions for each issue
 
 const STATUS_MAP = {
   'Ready for pickup': 'PICKUP SCHEDULED',
@@ -45,7 +47,7 @@ const STATUS_MAP = {
 // =============================
 const http = axios.create({
   headers: {
-    'User-Agent': 'instasport-delhivery-jira-sync/1.1'
+    'User-Agent': 'instasport-delhivery-jira-sync/1.3'
   },
   timeout: 20000
 });
@@ -99,8 +101,15 @@ const getTracking = async (awb) => {
 // =============================
 // Jira helpers
 // =============================
+// Normalize status names by removing non-alphanumerics and lowercasing
+const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 const JIRA_STATUS_ALIASES = {
-  'RTO IN - TRANSIT': ['RTO IN - TRANSIT', 'RTO IN-TRANSIT', 'RTO IN TRANSIT', 'Return In-Transit', 'Return In Transit'],
+  'RTO IN - TRANSIT': [
+    'RTO IN - TRANSIT', 'RTO IN-TRANSIT', 'RTO IN TRANSIT',
+    'RTO - IN TRANSIT', 'RTO - In Transit', 'RTO- IN TRANSIT',
+    'Return In-Transit', 'Return In Transit', 'Return InTransit'
+  ],
   'IN - TRANSIT': ['IN - TRANSIT', 'IN-TRANSIT', 'IN TRANSIT'],
   'PICKUP SCHEDULED': ['PICKUP SCHEDULED'],
   'OUT FOR DELIVERY': ['OUT FOR DELIVERY'],
@@ -108,9 +117,11 @@ const JIRA_STATUS_ALIASES = {
   'RTO DELIVERED': ['RTO DELIVERED', 'RETURN DELIVERED']
 };
 
-const findTransitionByName = (transitions, target) => {
-  const targets = (JIRA_STATUS_ALIASES[target] || [target]).map(s => s.toLowerCase());
-  return transitions.find(t => targets.includes((t.to?.name || '').toLowerCase()));
+const targetsFor = (target) => (JIRA_STATUS_ALIASES[target] || [target]).map(norm);
+
+const findTransitionCandidates = (transitions, target) => {
+  const wanted = new Set(targetsFor(target));
+  return transitions.filter(t => wanted.has(norm(t.to?.name)));
 };
 
 const fetchAllIssues = async (jql) => {
@@ -153,19 +164,24 @@ const postCommentADF = async (issueKey, commentText) => {
 };
 
 const tryTransition = async (issueKey, newStatus) => {
-  const transitionRes = await http.get(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
+  const res = await http.get(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
     auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
   });
-  const available = transitionRes.data.transitions.map(t => t.to?.name);
-  const transition = findTransitionByName(transitionRes.data.transitions, newStatus);
-  if (!transition) {
-    console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}. Available: ${JSON.stringify(available)}`);
-    return { ok: false, available };
+  const transitions = res.data.transitions || [];
+  if (LOG_TRANSITIONS) {
+    console.log(`🔎 Transitions for ${issueKey}:`, transitions.map(t => t.to?.name));
   }
-  await http.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, { transition: { id: transition.id } }, {
+  const candidates = findTransitionCandidates(transitions, newStatus);
+  if (candidates.length === 0) {
+    console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}. Available: ${JSON.stringify(transitions.map(t => t.to?.name))}`);
+    return { ok: false };
+  }
+  // try first candidate
+  const chosen = candidates[0];
+  await http.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, { transition: { id: chosen.id } }, {
     auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
   });
-  return { ok: true, available };
+  return { ok: true };
 };
 
 const updateJira = async (issueKey, newStatus, customFields = {}, comment = null) => {
@@ -269,6 +285,12 @@ const buildDateUpdates = (issue, t) => {
 // Issue selection
 // =============================
 const getJiraIssues = async () => {
+  if (DEBUG_ISSUE_KEY) {
+    const jql = `key = ${DEBUG_ISSUE_KEY}`;
+    console.log('📥 Debug mode — fetching single issue:', DEBUG_ISSUE_KEY);
+    return await fetchAllIssues(jql);
+  }
+
   const since = dayjs().subtract(CREATED_SINCE_DAYS, 'day').format('YYYY-MM-DD');
   // Include DELIVERED so we can flip to RTO if needed; exclude only final RTO and pickup scheduled
   const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
