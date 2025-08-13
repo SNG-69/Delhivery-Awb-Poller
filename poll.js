@@ -111,43 +111,43 @@ const interpretStatus = (tracking) => {
     return "IN - TRANSIT";
   }
 
-  if (instructions.includes("Consignee Unavailable")) {
+  if (instructions.includes("consignee unavailable")) {
     return "IN - TRANSIT";
   }
 
-  if (instructions.includes("Agent remark incorrect")) {
+  if (instructions.includes("agent remark incorrect")) {
     return "IN - TRANSIT";
   }
 
-  if (instructions.includes("Arriving Today")) {
+  if (instructions.includes("arriving today")) {
     return "IN - TRANSIT";
   }
 
-  if (instructions.includes("Office/Institute closed")) {
+  if (instructions.includes("office/institute closed")) {
     return "IN - TRANSIT";
   }
 
-  if (instructions.includes("Whatsapp verified cancellation")) {
+  if (instructions.includes("whatsapp verified cancellation")) {
     return "RTO IN - TRANSIT";
   }
 
-  if (instructions.includes("Code verified cancellation")) {
+  if (instructions.includes("code verified cancellation")) {
     return "RTO IN - TRANSIT";
   }
 
-  if (instructions.includes("Dispatched for RTO")) {
+  if (instructions.includes("dispatched for rto")) {
     return "RTO IN - TRANSIT";
   }
 
-  if (instructions.includes("Not attempted")) {
+  if (instructions.includes("not attempted")) {
     return "NDR - 3";
   }
 
-  if (instructions.includes("Maximum attempts reached")) {
+  if (instructions.includes("maximum attempts reached")) {
     return "IN - TRANSIT";
   }
 
-  if (instructions.includes("RETURN Accepted")) {
+  if (instructions.includes("return accepted")) {
     return "RTO DELIVERED";
   }
 
