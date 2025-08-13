@@ -126,6 +126,7 @@ const interpretStatus = (tracking) => {
   if (instructions.includes("not attempted")) return "NDR - 3";
   if (instructions.includes("maximum attempts reached")) return "IN - TRANSIT";
   if (instructions.includes("return accepted")) return "RTO DELIVERED";
+  if (instructions.includes("bag added to trip")) return "RTO IN - TRANSIT";
 
   // 4) Fallback to your explicit STATUS_MAP mapping
   return STATUS_MAP[status] || null;
