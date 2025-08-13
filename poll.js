@@ -101,14 +101,14 @@ const fetchAllIssues = async (jql) => {
 // --- Interpret Delhivery Status ---
 const interpretStatus = (tracking) => {
   const s = tracking?.Status || {};
-  const status = (s.Status || "").trim();                         // e.g., "In Transit"
-  const instructions = (s.Instructions || "").toLowerCase();      // normalized
+  const status = (s.Status || "").trim();
+  const instructions = (s.Instructions || "").toLowerCase();
   const statusType = (s.StatusType || s.ScanType || "").toUpperCase();
 
-  // 0) Terminal RTO first
+  // Terminal RTO first
   if (tracking.ReturnedDate) return "RTO DELIVERED";
 
-  // 1) Decide if it’s the RETURN leg (RTO) — make this override forward states
+  // Decide return leg (RTO) — overrides forward delivery artefacts
   const isReturnFlow =
     ["RT", "RTO", "RET"].includes(statusType) ||
     Boolean(tracking.ReverseInTransit) ||
@@ -118,10 +118,10 @@ const interpretStatus = (tracking) => {
 
   if (isReturnFlow) return "RTO IN - TRANSIT";
 
-  // 2) Only then consider forward delivery as terminal
+  // Only then consider forward delivered as terminal
   if (tracking.DeliveryDate) return "DELIVERED";
 
-  // 3) Heuristics (all lowercase checks)
+  // Heuristics
   if (instructions.includes("bag added to trip")) return "IN - TRANSIT";
   if (instructions.includes("consignee will collect")) return "IN - TRANSIT";
   if (instructions.includes("shipment received at facility")) return "IN - TRANSIT";
@@ -136,7 +136,7 @@ const interpretStatus = (tracking) => {
   if (instructions.includes("maximum attempts reached")) return "IN - TRANSIT";
   if (instructions.includes("return accepted")) return "RTO DELIVERED";
 
-  // 4) Fallback to explicit map
+  // Fallback to explicit map
   return STATUS_MAP[status] || null;
 };
 
