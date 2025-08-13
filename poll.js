@@ -4,7 +4,7 @@ const dayjs = require('dayjs');
 
 // ---------- Config ----------
 axios.defaults.timeout = 20000;
-axios.defaults.headers.common['User-Agent'] = 'instasport-delhivery-jira-sync/1.0';
+axios.defaults.headers.common['User-Agent'] = 'instasport-delhivery-jira-sync/1.1';
 
 // Env
 const DELHIVERY_TOKEN = process.env.DELHIVERY_TOKEN;
@@ -20,7 +20,7 @@ const RTO_DELIVERED_DATE_FIELD = process.env.CUSTOMFIELD_RTO_DATE;
 const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d710d4e8-270f-4d7a-b65a-7303f71783fb';
 
 // Diagnostics / knobs
-const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 60);
+const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
 const DEBUG_ISSUE_KEY = process.env.DEBUG_ISSUE_KEY || '';     // e.g. "OPS-1234"
 const DEBUG_AWB = process.env.DEBUG_AWB || '';                 // e.g. "29798810134374"
 const LOG_TRANSITIONS = process.env.LOG_TRANSITIONS === '1';
@@ -58,7 +58,6 @@ const JIRA_STATUS_ALIASES = {
 
 // ---------- Utils ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
 const nameNorm = (s) => (s || '').toLowerCase().replace(/[\s_\-]+/g, '');
 
 const findTransitionByName = (transitions, target) => {
@@ -125,7 +124,7 @@ const getTracking = async (awb) => {
 const fetchAllIssues = async (jql) => {
   const all = [];
   let startAt = 0;
-  const pageSize = 50; // safe for Jira Cloud (cap varies by site)
+  const pageSize = 50; // safe for Jira Cloud
 
   while (true) {
     const { data } = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
@@ -136,7 +135,6 @@ const fetchAllIssues = async (jql) => {
     const issues = data.issues || [];
     all.push(...issues);
 
-    // compute next page from the response, not our request
     const nextStart = (data.startAt || 0) + issues.length;
     const total = data.total ?? nextStart;
 
@@ -205,42 +203,63 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
   }
 };
 
-// ---------- Classification ----------
+// ---------- Classification helpers ----------
 const hasRecentRTScan = (tracking, lookback = 8) => {
   const scans = Array.isArray(tracking?.Scans) ? tracking.Scans : [];
   return scans.slice(-lookback).some(x => (x?.ScanDetail?.ScanType || '').toUpperCase() === 'RT');
 };
 
-const isReturnFlow = (tracking) => {
-  const s = tracking?.Status || {};
+const hasTerminalRTO = (t) => {
+  const s = t?.Status || {};
+  const scans = Array.isArray(t?.Scans) ? t.Scans : [];
+  const instr = (s.Instructions || '').toLowerCase();
+
+  // ReturnedDate beats everything
+  if (t.ReturnedDate) return true;
+
+  // Terminal RTO style scan on the status
+  if ((s.StatusType || s.ScanType || '').toUpperCase() === 'DL' &&
+      ( (s.Status || '').toLowerCase().includes('rto') || instr.includes('return accepted') )) return true;
+
+  // Any DL scan that looks like RTO complete
+  return scans.some(x => {
+    const sd = x?.ScanDetail || {};
+    return (sd.ScanType || '').toUpperCase() === 'DL' &&
+           ( (sd.Scan || '').toLowerCase().includes('rto') ||
+             (sd.Instructions || '').toLowerCase().includes('return accepted') );
+  });
+};
+
+const isReturnFlow = (t) => {
+  const s = t?.Status || {};
   const statusType = (s.StatusType || s.ScanType || '').toUpperCase();
   const statusTxt = (s.Status || '').toLowerCase();
   const instr = (s.Instructions || '').toLowerCase();
   return (
     ['RT','RTO','RET'].includes(statusType) ||
-    !!tracking.ReverseInTransit ||
-    !!tracking.RTOStartedDate ||
-    hasRecentRTScan(tracking) ||
+    !!t.ReverseInTransit ||
+    !!t.RTOStartedDate ||
+    hasRecentRTScan(t) ||
     statusTxt.includes('rto') ||
     instr.includes('rto')
   );
 };
 
-const interpretStatus = (tracking) => {
-  const s = tracking?.Status || {};
+const interpretStatus = (t) => {
+  const s = t?.Status || {};
   const status = (s.Status || '').trim();
   const instructions = (s.Instructions || '').toLowerCase();
 
-  // Final RTO first
-  if (tracking.ReturnedDate) return 'RTO DELIVERED';
+  // 1) Terminal RTO first
+  if (hasTerminalRTO(t)) return 'RTO DELIVERED';
 
-  // Return leg overrides any forward artefacts
-  if (isReturnFlow(tracking)) return 'RTO IN - TRANSIT';
+  // 2) Return leg next (RTO in transit)
+  if (isReturnFlow(t)) return 'RTO IN - TRANSIT';
 
-  // Forward final
-  if (tracking.DeliveryDate) return 'DELIVERED';
+  // 3) Forward terminal
+  if (t.DeliveryDate) return 'DELIVERED';
 
-  // Heuristics (forward)
+  // 4) Heuristics (forward)
   if (instructions.includes('consignee will collect')) return 'IN - TRANSIT';
   if (instructions.includes('shipment received at facility')) return 'IN - TRANSIT';
   if (instructions.includes('consignee unavailable')) return 'IN - TRANSIT';
@@ -248,7 +267,7 @@ const interpretStatus = (tracking) => {
   if (instructions.includes('arriving today')) return 'IN - TRANSIT';
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
 
-  // Heuristics implying RTO
+  // 5) Heuristics implying RTO
   if (instructions.includes('whatsapp verified cancellation')) return 'RTO IN - TRANSIT';
   if (instructions.includes('code verified cancellation')) return 'RTO IN - TRANSIT';
   if (instructions.includes('dispatched for rto')) return 'RTO IN - TRANSIT';
@@ -257,28 +276,32 @@ const interpretStatus = (tracking) => {
   if (instructions.includes('not attempted')) return 'NDR - 3';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
 
-  // Fallback map
+  // 6) Fallback map
   return STATUS_MAP[status] || null;
 };
 
-// Only write date fields that actually change
-const buildDateUpdates = (issue, t) => {
+// ---------- Field updates ----------
+const buildDateUpdates = (issue, t, updatedStatus) => {
   const out = {};
   const fmt = (d) => dayjs(d).format('YYYY-MM-DD');
-
   const cur = issue.fields || {};
+
   if (t.OriginRecieveDate) {
     const v = fmt(t.OriginRecieveDate);
     if (cur[DISPATCH_DATE_FIELD] !== v) out[DISPATCH_DATE_FIELD] = v;
   }
-  if (t.DeliveryDate) {
+
+  // Only write Delivery Date for forward deliveries
+  if (t.DeliveryDate && updatedStatus === 'DELIVERED') {
     const v = fmt(t.DeliveryDate);
     if (cur[DELIVERY_DATE_FIELD] !== v) out[DELIVERY_DATE_FIELD] = v;
   }
-  if (t.ReturnedDate) {
+
+  if (t.ReturnedDate && updatedStatus === 'RTO DELIVERED') {
     const v = fmt(t.ReturnedDate);
     if (cur[RTO_DELIVERED_DATE_FIELD] !== v) out[RTO_DELIVERED_DATE_FIELD] = v;
   }
+
   return out;
 };
 
@@ -335,10 +358,7 @@ const run = async () => {
       }
 
       // Classify
-      let updatedStatus = interpretStatus(tracking);
-
-      // HARD OVERRIDE: if signals say return leg, force RTO IN - TRANSIT
-      if (isReturnFlow(tracking)) updatedStatus = 'RTO IN - TRANSIT';
+      const updatedStatus = interpretStatus(tracking);
 
       console.log(`[decision] ${issue.key} awb=${awb} cur="${currentStatus}" -> new="${updatedStatus}" type=${(tracking.Status?.StatusType||tracking.Status?.ScanType)||""} reverse=${!!tracking.ReverseInTransit} rtoStart=${!!tracking.RTOStartedDate} hasRTScan=${hasRecentRTScan(tracking)}`);
 
@@ -354,7 +374,7 @@ const run = async () => {
       }
 
       // Date fields (only changed ones)
-      const customFields = buildDateUpdates(issue, tracking);
+      const customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
       // Comment
       let comment = null;
