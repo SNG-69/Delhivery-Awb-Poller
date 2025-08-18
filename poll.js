@@ -272,6 +272,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('code verified cancellation')) return 'RTO IN - TRANSIT';
   if (instructions.includes('dispatched for rto')) return 'RTO IN - TRANSIT';
   if (instructions.includes('return accepted')) return 'RTO DELIVERED';
+  if (instructions.includes('consignee refused to accept/order cancelled')) return 'RTO IN - TRANSIT';
 
   if (instructions.includes('not attempted')) return 'NDR - 3';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
