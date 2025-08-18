@@ -41,7 +41,7 @@ const STATUS_MAP = {
   'RTO - Returned': 'RTO DELIVERED',
   'Cancelled': 'PICKUP EXCEPTION - DELHIVERY',
   'Shipment delivery cancelled via OTP': 'PICKUP EXCEPTION - DELHIVERY',
-  'NDR': 'NDR - 3',
+  'NDR': 'NDR',
   'Manifested': 'PICKUP SCHEDULED',
   'Pending': 'PICKUP SCHEDULED',
   'Not Picked': 'PICKUP EXCEPTION - DELHIVERY',
@@ -275,7 +275,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('return accepted')) return 'RTO DELIVERED';
   if (instructions.includes('consignee refused to accept/order cancelled')) return 'RTO IN - TRANSIT';
 
-  if (instructions.includes('not attempted')) return 'NDR - 3';
+  if (instructions.includes('not attempted')) return 'NDR';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
 
   // 6) Fallback map
@@ -382,7 +382,7 @@ const run = async () => {
       let comment = null;
       switch (updatedStatus) {
         case 'IN - TRANSIT': comment = `Order is now in transit as of ${new Date().toISOString()}`; break;
-        case 'NDR - 3': comment = `Order marked as NDR (Non-Delivery Report) as of ${new Date().toISOString()}`; break;
+        case 'NDR': comment = `Order marked as NDR (Non-Delivery Report) as of ${new Date().toISOString()}`; break;
         case 'RTO IN - TRANSIT':
           comment = `Order is now RTO in transit as of ${new Date().toISOString()} (Signals: StatusType=${(tracking.Status?.StatusType||tracking.Status?.ScanType)||"?"}, ReverseInTransit=${!!tracking.ReverseInTransit}, RTOStartedDate=${tracking.RTOStartedDate || "N/A"}, hasRTScan=${hasRecentRTScan(tracking)})`;
           break;
