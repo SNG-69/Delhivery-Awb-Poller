@@ -261,6 +261,7 @@ const interpretStatus = (t) => {
 
   // 4) Heuristics (forward)
   if (instructions.includes('consignee will collect')) return 'IN - TRANSIT';
+  if (instructions.includes('consignee will collect from branch')) return 'IN - TRANSIT';
   if (instructions.includes('shipment received at facility')) return 'IN - TRANSIT';
   if (instructions.includes('consignee unavailable')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark incorrect')) return 'IN - TRANSIT';
@@ -277,6 +278,7 @@ const interpretStatus = (t) => {
 
   if (instructions.includes('not attempted')) return 'NDR';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
+  if (instructions.includes('ntd updated')) return 'RTO IN - TRANSIT';
 
   // 6) Fallback map
   return STATUS_MAP[status] || null;
