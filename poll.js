@@ -261,7 +261,7 @@ const interpretStatus = (t) => {
 
   // 4) Heuristics (forward)
   if (instructions.includes('consignee will collect')) return 'IN - TRANSIT';
-  if (instructions.includes('consignee will collect from branch')) return 'IN - TRANSIT';
+  if (instructions.includes('consignee to collect from branch')) return 'IN - TRANSIT';
   if (instructions.includes('shipment received at facility')) return 'IN - TRANSIT';
   if (instructions.includes('consignee unavailable')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark incorrect')) return 'IN - TRANSIT';
