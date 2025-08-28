@@ -275,10 +275,10 @@ const interpretStatus = (t) => {
   if (instructions.includes('dispatched for rto')) return 'RTO IN - TRANSIT';
   if (instructions.includes('return accepted')) return 'RTO DELIVERED';
   if (instructions.includes('consignee refused to accept/order cancelled')) return 'RTO IN - TRANSIT';
-
   if (instructions.includes('not attempted')) return 'NDR';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
   if (instructions.includes('ntd updated')) return 'RTO IN - TRANSIT';
+  if (instructions.includes('recipient unavailable.establishment closed')) return 'RTO IN - TRANSIT';
 
   // 6) Fallback map
   return STATUS_MAP[status] || null;
