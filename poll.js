@@ -281,6 +281,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('package found in audit')) return 'IN - TRANSIT';
   if (instructions.includes('celivery rescheduled by customer')) return 'IN - TRANSIT';
   if (instructions.includes('delayed due to weather conditions')) return 'IN - TRANSIT';
+  if (instructions.includes('natural disaster')) return 'IN - TRANSIT';
   if (instructions.includes('ntd updated')) return 'RTO IN - TRANSIT';
   if (instructions.includes('recipient unavailable.establishment closed')) return 'RTO IN - TRANSIT';
 
