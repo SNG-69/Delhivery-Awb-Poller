@@ -278,6 +278,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('not attempted')) return 'NDR';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
   if (instructions.includes('package missing in audit')) return 'IN - TRANSIT';
+  if (instructions.includes('package found in audit')) return 'IN - TRANSIT';
   if (instructions.includes('delayed due to weather conditions')) return 'IN - TRANSIT';
   if (instructions.includes('ntd updated')) return 'RTO IN - TRANSIT';
   if (instructions.includes('recipient unavailable.establishment closed')) return 'RTO IN - TRANSIT';
