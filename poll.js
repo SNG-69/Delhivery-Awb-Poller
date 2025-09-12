@@ -4,7 +4,7 @@ const dayjs = require('dayjs');
 
 // ---------- Config ----------
 axios.defaults.timeout = 20000;
-axios.defaults.headers.common['User-Agent'] = 'instasport-delhivery-jira-sync/1.1';
+axios.defaults.headers.common['User-Agent'] = 'instasport-delhivery-jira-sync/1.2';
 
 // Env
 const DELHIVERY_TOKEN = process.env.DELHIVERY_TOKEN;
@@ -19,8 +19,8 @@ const DELIVERY_DATE_FIELD = process.env.CUSTOMFIELD_DELIVERY_DATE;
 const RTO_DELIVERED_DATE_FIELD = process.env.CUSTOMFIELD_RTO_DATE;
 const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d710d4e8-270f-4d7a-b65a-7303f71783fb';
 
-// Write latest Delhivery instruction into this Jira field:
-const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments" (short plain text)
+// Write latest Delhivery instruction into this Jira field (short plain text)
+const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments"
 
 // Diagnostics / knobs
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
@@ -68,7 +68,7 @@ const findTransitionByName = (transitions, target) => {
   const exact = transitions.find(t => targets.includes(nameNorm(t.to?.name)));
   if (exact) return exact;
 
-  // Fuzzy fallback for RTO in transit
+  // Fuzzy fallback: for RTO we accept any status containing both "rto" and "transit"
   const targetNorm = nameNorm(target);
   if (targetNorm.includes('rtointransit')) {
     const fuzzy = transitions.find(t => {
@@ -176,7 +176,7 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
 
     if (!transition) {
       console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}. Available: ${JSON.stringify(transitionRes.data.transitions.map(t => t.to?.name))}`);
-      return; // bail early
+      return; // bail early — don’t write fields/comments if we didn’t move
     }
 
     await axios.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
@@ -200,11 +200,24 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
     }
 
     if (comment) {
-      await postCommentADF(issueKey, comment); // keep your original single-line status comments
+      await postCommentADF(issueKey, comment); // keep your original status comment
     }
 
   } catch (err) {
     console.error(`❌ Failed to update JIRA ${issueKey}:`, err.response?.data || err.message);
+  }
+};
+
+// NEW: fields-only updater (for when status is unchanged)
+const updateJiraFieldsOnly = async (issueKey, fields) => {
+  if (!fields || Object.keys(fields).length === 0) return;
+  try {
+    await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}`, { fields }, {
+      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
+    });
+    console.log(`📝 Fields updated for ${issueKey} (no transition)`);
+  } catch (err) {
+    console.error(`❌ Failed to update fields for ${issueKey}:`, err.response?.data || err.message);
   }
 };
 
@@ -255,7 +268,7 @@ const interpretStatus = (t) => {
   // 1) Terminal RTO first
   if (hasTerminalRTO(t)) return 'RTO DELIVERED';
 
-  // 2) Return leg next
+  // 2) Return leg next (RTO in transit)
   if (isReturnFlow(t)) return 'RTO IN - TRANSIT';
 
   // 3) Forward terminal
@@ -346,7 +359,7 @@ const getLatestInstruction = (t) => {
   };
 };
 
-const formatInstructionForComment = (info) => {
+const formatInstructionLine = (info) => {
   if (!info) return '';
   const parts = [];
   parts.push(`"${info.instruction}"`);
@@ -410,7 +423,6 @@ const run = async () => {
 
       // Classify
       const updatedStatus = interpretStatus(tracking);
-
       console.log(`[decision] ${issue.key} awb=${awb} cur="${currentStatus}" -> new="${updatedStatus}" type=${(tracking.Status?.StatusType||tracking.Status?.ScanType)||""} reverse=${!!tracking.ReverseInTransit} rtoStart=${!!tracking.RTOStartedDate} hasRTScan=${hasRecentRTScan(tracking)}`);
 
       if (!updatedStatus) {
@@ -418,25 +430,29 @@ const run = async () => {
         continue;
       }
 
-      if (currentStatus && nameNorm(currentStatus) === nameNorm(updatedStatus)) {
-        console.log(`⏩ Skipping ${issue.key} — already "${updatedStatus}"`);
-        skipped++;
-        continue;
-      }
+      // Always prepare possible field updates (dates + latest instruction) BEFORE the skip check
+      let customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
-      // Date fields (only changed ones)
-      const customFields = buildDateUpdates(issue, tracking, updatedStatus);
-
-      // NEW: write latest Delhivery instruction string into custom field (short text)
       const latestIns = getLatestInstruction(tracking);
       if (latestIns) {
-        const line = formatInstructionForComment(latestIns); // e.g. "Delivered to consignee" @ ... [EOD-38] on 2025-09-10T13:21:26.002Z
+        const line = formatInstructionLine(latestIns);
         if (line) {
           const currentVal = issue.fields?.[LATEST_INSTRUCTION_FIELD];
           if (currentVal !== line) {
             customFields[LATEST_INSTRUCTION_FIELD] = line;
+            console.log(`ℹ️ Latest instruction prepared for ${issue.key}: ${line}`);
           }
         }
+      }
+
+      // If status is unchanged, only push field updates (if any), then skip transition
+      if (currentStatus && nameNorm(currentStatus) === nameNorm(updatedStatus)) {
+        if (Object.keys(customFields).length > 0) {
+          await updateJiraFieldsOnly(issue.key, customFields);
+        }
+        console.log(`⏩ Skipping transition for ${issue.key} — already "${updatedStatus}"`);
+        skipped++;
+        continue;
       }
 
       // Build your original single-line comment (unchanged logic)
@@ -454,8 +470,6 @@ const run = async () => {
       // Transition + fields + (original) comment + post-delivery assignment
       await updateJira(issue.key, updatedStatus, customFields, comment);
       updated++;
-
-      // Note: We intentionally removed the "extra instruction comment". The latest instruction is now stored in customfield_10288.
 
       await sleep(SLEEP_MS);
 
