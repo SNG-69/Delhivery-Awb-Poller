@@ -19,6 +19,9 @@ const DELIVERY_DATE_FIELD = process.env.CUSTOMFIELD_DELIVERY_DATE;
 const RTO_DELIVERED_DATE_FIELD = process.env.CUSTOMFIELD_RTO_DATE;
 const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d710d4e8-270f-4d7a-b65a-7303f71783fb';
 
+// Write latest Delhivery instruction into this Jira field:
+const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments" (short plain text)
+
 // Diagnostics / knobs
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
 const DEBUG_ISSUE_KEY = process.env.DEBUG_ISSUE_KEY || '';     // e.g. "OPS-1234"
@@ -65,7 +68,7 @@ const findTransitionByName = (transitions, target) => {
   const exact = transitions.find(t => targets.includes(nameNorm(t.to?.name)));
   if (exact) return exact;
 
-  // Fuzzy fallback: for RTO we accept any status containing both "rto" and "transit"
+  // Fuzzy fallback for RTO in transit
   const targetNorm = nameNorm(target);
   if (targetNorm.includes('rtointransit')) {
     const fuzzy = transitions.find(t => {
@@ -124,7 +127,7 @@ const getTracking = async (awb) => {
 const fetchAllIssues = async (jql) => {
   const all = [];
   let startAt = 0;
-  const pageSize = 50; // safe for Jira Cloud
+  const pageSize = 50; // Jira Cloud safe
 
   while (true) {
     const { data } = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
@@ -173,7 +176,7 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
 
     if (!transition) {
       console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}. Available: ${JSON.stringify(transitionRes.data.transitions.map(t => t.to?.name))}`);
-      return; // bail early — don’t write fields/comments if we didn’t move
+      return; // bail early
     }
 
     await axios.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
@@ -189,13 +192,15 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
       console.log(`🛠️ Custom fields updated for ${issueKey}`);
     }
 
-    if (comment) await postCommentADF(issueKey, comment);
-
     if (["DELIVERED", "RTO DELIVERED"].includes(newStatus)) {
       await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/assignee`, {
         accountId: POST_DELIVERY_ASSIGNEE
       }, { auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN } });
       console.log(`👤 Assigned ${issueKey} to post-delivery assignee`);
+    }
+
+    if (comment) {
+      await postCommentADF(issueKey, comment); // keep your original single-line status comments
     }
 
   } catch (err) {
@@ -214,19 +219,16 @@ const hasTerminalRTO = (t) => {
   const scans = Array.isArray(t?.Scans) ? t.Scans : [];
   const instr = (s.Instructions || '').toLowerCase();
 
-  // ReturnedDate beats everything
   if (t.ReturnedDate) return true;
 
-  // Terminal RTO style scan on the status
   if ((s.StatusType || s.ScanType || '').toUpperCase() === 'DL' &&
-      ( (s.Status || '').toLowerCase().includes('rto') || instr.includes('return accepted') )) return true;
+      ((s.Status || '').toLowerCase().includes('rto') || instr.includes('return accepted'))) return true;
 
-  // Any DL scan that looks like RTO complete
   return scans.some(x => {
     const sd = x?.ScanDetail || {};
     return (sd.ScanType || '').toUpperCase() === 'DL' &&
-           ( (sd.Scan || '').toLowerCase().includes('rto') ||
-             (sd.Instructions || '').toLowerCase().includes('return accepted') );
+           ((sd.Scan || '').toLowerCase().includes('rto') ||
+            (sd.Instructions || '').toLowerCase().includes('return accepted'));
   });
 };
 
@@ -253,7 +255,7 @@ const interpretStatus = (t) => {
   // 1) Terminal RTO first
   if (hasTerminalRTO(t)) return 'RTO DELIVERED';
 
-  // 2) Return leg next (RTO in transit)
+  // 2) Return leg next
   if (isReturnFlow(t)) return 'RTO IN - TRANSIT';
 
   // 3) Forward terminal
@@ -314,11 +316,51 @@ const buildDateUpdates = (issue, t, updatedStatus) => {
   return out;
 };
 
+// ---------- Latest instruction helpers ----------
+const getLatestInstruction = (t) => {
+  if (!t) return null;
+
+  // Prefer top-level Status.Instructions (usually the latest)
+  const statusIns = t.Status?.Instructions && String(t.Status.Instructions).trim();
+  const statusWhen = t.Status?.StatusDateTime || t.DeliveryDate || t.DestRecieveDate || null;
+  const statusWhere = t.Status?.StatusLocation || null;
+  const statusCode = t.Status?.StatusCode || null;
+
+  if (statusIns) {
+    return { instruction: statusIns, when: statusWhen, where: statusWhere, code: statusCode };
+  }
+
+  // Fallback to most recent scan’s instruction (or scan text)
+  const scans = Array.isArray(t.Scans) ? t.Scans : [];
+  const latest = scans
+    .map(s => s?.ScanDetail || {})
+    .filter(sd => sd && (sd.Instructions || sd.Scan))
+    .sort((a, b) => new Date(b.ScanDateTime || 0) - new Date(a.ScanDateTime || 0))[0];
+
+  if (!latest) return null;
+  return {
+    instruction: String(latest.Instructions || latest.Scan || '').trim(),
+    when: latest.StatusDateTime || latest.ScanDateTime || null,
+    where: latest.ScannedLocation || null,
+    code: latest.StatusCode || null
+  };
+};
+
+const formatInstructionForComment = (info) => {
+  if (!info) return '';
+  const parts = [];
+  parts.push(`"${info.instruction}"`);
+  if (info.where) parts.push(`@ ${info.where}`);
+  if (info.code) parts.push(`[${info.code}]`);
+  if (info.when) parts.push(`on ${new Date(info.when).toISOString()}`);
+  return parts.join(' ');
+};
+
 // ---------- Issues ----------
 const getJiraIssues = async () => {
   const since = dayjs().subtract(CREATED_SINCE_DAYS, 'day').format('YYYY-MM-DD');
 
-  // Include Delivered in "others" so we can correct wrong forwards → RTO
+  // Include Delivered in "others" so we can correct forward→RTO if needed
   const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
   const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status NOT IN ("RTO DELIVERED","PICKUP SCHEDULED") ORDER BY updated DESC`;
 
@@ -385,7 +427,19 @@ const run = async () => {
       // Date fields (only changed ones)
       const customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
-      // Comment
+      // NEW: write latest Delhivery instruction string into custom field (short text)
+      const latestIns = getLatestInstruction(tracking);
+      if (latestIns) {
+        const line = formatInstructionForComment(latestIns); // e.g. "Delivered to consignee" @ ... [EOD-38] on 2025-09-10T13:21:26.002Z
+        if (line) {
+          const currentVal = issue.fields?.[LATEST_INSTRUCTION_FIELD];
+          if (currentVal !== line) {
+            customFields[LATEST_INSTRUCTION_FIELD] = line;
+          }
+        }
+      }
+
+      // Build your original single-line comment (unchanged logic)
       let comment = null;
       switch (updatedStatus) {
         case 'IN - TRANSIT': comment = `Order is now in transit as of ${new Date().toISOString()}`; break;
@@ -397,8 +451,12 @@ const run = async () => {
         case 'DELIVERED': comment = `Order successfully delivered on ${new Date().toISOString()}`; break;
       }
 
+      // Transition + fields + (original) comment + post-delivery assignment
       await updateJira(issue.key, updatedStatus, customFields, comment);
       updated++;
+
+      // Note: We intentionally removed the "extra instruction comment". The latest instruction is now stored in customfield_10288.
+
       await sleep(SLEEP_MS);
 
     } catch (err) {
