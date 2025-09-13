@@ -22,6 +22,9 @@ const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d71
 // Write latest Delhivery instruction into this Jira field (short plain text)
 const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments"
 
+// NEW: Out for Delivery Date (date picker)
+const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
+
 // Diagnostics / knobs
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
 const DEBUG_ISSUE_KEY = process.env.DEBUG_ISSUE_KEY || '';     // e.g. "OPS-1234"
@@ -361,14 +364,26 @@ const getLatestInstruction = (t) => {
   };
 };
 
-const formatInstructionLine = (info) => {
-  if (!info) return '';
-  const parts = [];
-  parts.push(`"${info.instruction}"`);
-  if (info.where) parts.push(`@ ${info.where}`);
-  if (info.code) parts.push(`[${info.code}]`);
-  if (info.when) parts.push(`on ${new Date(info.when).toISOString()}`);
-  return parts.join(' ');
+// Find the most relevant timestamp for an "Out for delivery" event
+const getOFDWhen = (tracking, latestIns) => {
+  // 1) If the *latest instruction* is OFD, use its timestamp
+  if (latestIns && /out for delivery/i.test(latestIns.instruction || '') && latestIns.when) {
+    return latestIns.when;
+  }
+  // 2) If top-level status itself is OFD, prefer StatusDateTime
+  if (/out for delivery/i.test(String(tracking?.Status?.Instructions || tracking?.Status?.Status || ''))) {
+    if (tracking?.Status?.StatusDateTime) return tracking.Status.StatusDateTime;
+  }
+  // 3) Search scans for the most recent OFD entry
+  const scans = Array.isArray(tracking?.Scans) ? tracking.Scans : [];
+  const ofdScan = scans
+    .map(s => s?.ScanDetail || {})
+    .filter(sd => /out for delivery/i.test(String(sd.Instructions || sd.Scan || '')))
+    .sort((a, b) => new Date(b.ScanDateTime || 0) - new Date(a.ScanDateTime || 0))[0];
+  if (ofdScan) return ofdScan.StatusDateTime || ofdScan.ScanDateTime;
+
+  // 4) Fallback to generic status time if present
+  return tracking?.Status?.StatusDateTime || null;
 };
 
 // ---------- Issues ----------
@@ -434,22 +449,48 @@ const run = async () => {
       // Always prepare possible field updates (dates + latest instruction) BEFORE the skip check
       let customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
+      // Grab the most recent instruction (prefers top-level Status.Instructions)
       const latestIns = getLatestInstruction(tracking);
       if (latestIns) {
-        const line = formatInstructionLine(latestIns);
-        if (line) {
-          const currentVal = issue.fields?.[LATEST_INSTRUCTION_FIELD];
-          if (currentVal === line) {
-            console.log(`ℹ️ Instruction unchanged for ${issue.key}: ${line}`);
-          } else {
-            customFields[LATEST_INSTRUCTION_FIELD] = line;
-            console.log(`ℹ️ Latest instruction prepared for ${issue.key}: ${line}`);
-          }
+        // (A) Write only the instruction text (no quotes / no extras)
+        const instrOnly = latestIns.instruction || '';
+        const currentInstr = issue.fields?.[LATEST_INSTRUCTION_FIELD] || '';
+        if (instrOnly && currentInstr !== instrOnly) {
+          customFields[LATEST_INSTRUCTION_FIELD] = instrOnly;
+          console.log(`ℹ️ Latest instruction (plain) prepared for ${issue.key}: ${instrOnly}`);
+        } else if (instrOnly) {
+          console.log(`ℹ️ Instruction unchanged for ${issue.key}: ${instrOnly}`);
         } else {
           console.log(`ℹ️ Instruction computed empty for ${issue.key}`);
         }
+
+        // (B) If instruction says "Out for delivery", set the OFD date (YYYY-MM-DD)
+        if (/out for delivery/i.test(instrOnly)) {
+          const whenFromInstr = getOFDWhen(tracking, latestIns);
+          if (whenFromInstr) {
+            const ofdDate = dayjs(whenFromInstr).format('YYYY-MM-DD');
+            const currentOfd = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD] || '';
+            if (ofdDate && currentOfd !== ofdDate) {
+              customFields[OUT_FOR_DELIVERY_DATE_FIELD] = ofdDate;
+              console.log(`🚚 Out-for-delivery date set from INSTRUCTION for ${issue.key}: ${ofdDate}`);
+            }
+          }
+        }
       } else {
         console.log(`ℹ️ No instruction found in payload for ${issue.key}`);
+      }
+
+      // NEW: If the computed status is "OUT FOR DELIVERY", also set the OFD date (even if the instruction didn't match)
+      if (updatedStatus === 'OUT FOR DELIVERY') {
+        const whenFromStatus = getOFDWhen(tracking, latestIns);
+        if (whenFromStatus) {
+          const ofdDate = dayjs(whenFromStatus).format('YYYY-MM-DD');
+          const currentOfd = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD] || '';
+          if (ofdDate && currentOfd !== ofdDate) {
+            customFields[OUT_FOR_DELIVERY_DATE_FIELD] = ofdDate;
+            console.log(`🚚 Out-for-delivery date set from STATUS for ${issue.key}: ${ofdDate}`);
+          }
+        }
       }
 
       // If status is unchanged, only push field updates (if any), then skip transition
@@ -472,6 +513,7 @@ const run = async () => {
           break;
         case 'RTO DELIVERED': comment = `Order RTO delivered as of ${new Date().toISOString()}`; break;
         case 'DELIVERED': comment = `Order successfully delivered on ${new Date().toISOString()}`; break;
+        case 'OUT FOR DELIVERY': comment = `Order is out for delivery as of ${new Date().toISOString()}`; break;
       }
 
       // Transition + fields + (original) comment + post-delivery assignment
