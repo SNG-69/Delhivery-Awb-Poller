@@ -208,7 +208,7 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
   }
 };
 
-// NEW: fields-only updater (for when status is unchanged)
+// Fields-only updater (for when status is unchanged)
 const updateJiraFieldsOnly = async (issueKey, fields) => {
   if (!fields || Object.keys(fields).length === 0) return;
   try {
@@ -310,17 +310,19 @@ const buildDateUpdates = (issue, t, updatedStatus) => {
   const fmt = (d) => dayjs(d).format('YYYY-MM-DD');
   const cur = issue.fields || {};
 
+  // Dispatch Date
   if (t.OriginRecieveDate) {
     const v = fmt(t.OriginRecieveDate);
     if (cur[DISPATCH_DATE_FIELD] !== v) out[DISPATCH_DATE_FIELD] = v;
   }
 
-  // Only write Delivery Date for forward deliveries
+  // Delivery Date (forward only)
   if (t.DeliveryDate && updatedStatus === 'DELIVERED') {
     const v = fmt(t.DeliveryDate);
     if (cur[DELIVERY_DATE_FIELD] !== v) out[DELIVERY_DATE_FIELD] = v;
   }
 
+  // RTO Delivered Date (return only)
   if (t.ReturnedDate && updatedStatus === 'RTO DELIVERED') {
     const v = fmt(t.ReturnedDate);
     if (cur[RTO_DELIVERED_DATE_FIELD] !== v) out[RTO_DELIVERED_DATE_FIELD] = v;
@@ -333,7 +335,7 @@ const buildDateUpdates = (issue, t, updatedStatus) => {
 const getLatestInstruction = (t) => {
   if (!t) return null;
 
-  // Prefer top-level Status.Instructions (usually the latest)
+  // Prefer top-level Status.Instructions (usually latest)
   const statusIns = t.Status?.Instructions && String(t.Status.Instructions).trim();
   const statusWhen = t.Status?.StatusDateTime || t.DeliveryDate || t.DestRecieveDate || null;
   const statusWhere = t.Status?.StatusLocation || null;
@@ -343,7 +345,7 @@ const getLatestInstruction = (t) => {
     return { instruction: statusIns, when: statusWhen, where: statusWhere, code: statusCode };
   }
 
-  // Fallback to most recent scan’s instruction (or scan text)
+  // Fallback to most recent scan’s instruction/scan
   const scans = Array.isArray(t.Scans) ? t.Scans : [];
   const latest = scans
     .map(s => s?.ScanDetail || {})
@@ -373,7 +375,6 @@ const formatInstructionLine = (info) => {
 const getJiraIssues = async () => {
   const since = dayjs().subtract(CREATED_SINCE_DAYS, 'day').format('YYYY-MM-DD');
 
-  // Include Delivered in "others" so we can correct forward→RTO if needed
   const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
   const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status NOT IN ("RTO DELIVERED","PICKUP SCHEDULED") ORDER BY updated DESC`;
 
@@ -438,11 +439,17 @@ const run = async () => {
         const line = formatInstructionLine(latestIns);
         if (line) {
           const currentVal = issue.fields?.[LATEST_INSTRUCTION_FIELD];
-          if (currentVal !== line) {
+          if (currentVal === line) {
+            console.log(`ℹ️ Instruction unchanged for ${issue.key}: ${line}`);
+          } else {
             customFields[LATEST_INSTRUCTION_FIELD] = line;
             console.log(`ℹ️ Latest instruction prepared for ${issue.key}: ${line}`);
           }
+        } else {
+          console.log(`ℹ️ Instruction computed empty for ${issue.key}`);
         }
+      } else {
+        console.log(`ℹ️ No instruction found in payload for ${issue.key}`);
       }
 
       // If status is unchanged, only push field updates (if any), then skip transition
