@@ -1,4 +1,4 @@
-name: Run Delhivery Poller Every 35 Minutes
+name: Run Delhivery Poller Every 55 Minutes
 
 on:
   schedule:
@@ -32,3 +32,4 @@ jobs:
           CUSTOMFIELD_DISPATCH_DATE: ${{ secrets.CUSTOMFIELD_DISPATCH_DATE }}
           CUSTOMFIELD_DELIVERY_DATE: ${{ secrets.CUSTOMFIELD_DELIVERY_DATE }}
           CUSTOMFIELD_RTO_DATE: ${{ secrets.CUSTOMFIELD_RTO_DATE }}
+
