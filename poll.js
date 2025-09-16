@@ -28,10 +28,10 @@ const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
 // Promised Delivery Date (forward EDD) — write-once
 const PROMISED_DELIVERY_DATE_FIELD = 'customfield_10354';
 
-// NEW: Latest EDD (forward) — overwrite allowed (ExpectedDeliveryDate || PromisedDeliveryDate)
-const LATEST_EDD_FIELD = 'customfield_10357';
+// Latest PDD (forward) — overwrite allowed (ExpectedDeliveryDate || PromisedDeliveryDate)
+const LATEST_PDD_FIELD = 'customfield_10357';
 
-// NEW: RTO fields (write-once)
+// RTO fields (write-once)
 const RTO_REASON_FIELD = 'customfield_10355';          // Short text
 const RTO_INITIATED_DATE_FIELD = 'customfield_10356';  // Date Picker
 
@@ -309,8 +309,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark verified')) return 'IN - TRANSIT';
   if (instructions.includes("reattempt as per client's instruction")) return 'IN - TRANSIT';
-
-  if (instructions.includes('payment Mode / amt dispute')) return 'IN - TRANSIT';
+  if (instructions.includes('payment mode / amt dispute')) return 'IN - TRANSIT';
 
   // 5) Heuristics implying RTO (centralized)
   if (VERIFIED_CXL_RE.test(instructions)) return 'RTO IN - TRANSIT';
@@ -499,19 +498,19 @@ const run = async () => {
 
       // === Latest PDD (overwrite allowed, forward) ===
       // Prefer ExpectedDeliveryDate; fallback to PromisedDeliveryDate
-      const rawLatestEDD = tracking?.ExpectedDeliveryDate || tracking?.PromisedDeliveryDate || null;
+      const rawLatestPDD = tracking?.ExpectedDeliveryDate || tracking?.PromisedDeliveryDate || null;
       if (rawLatestPDD) {
-        const newEdd = dayjs(rawLatestEDD).isValid() ? dayjs(rawLatestEDD).format('YYYY-MM-DD') : null;
-        const currentEdd = issue.fields?.[LATEST_EDD_FIELD] || null;
-        if (newEdd && newEdd !== currentEdd) {
-          customFields[LATEST_PDD_FIELD] = newEdd;
-          if (currentEdd) {
-            console.log(`🗓️ Latest PDD updated for ${issue.key}: ${currentEdd} -> ${newEdd}`);
+        const newPdd = dayjs(rawLatestPDD).isValid() ? dayjs(rawLatestPDD).format('YYYY-MM-DD') : null;
+        const currentPdd = issue.fields?.[LATEST_PDD_FIELD] || null;
+        if (newPdd && newPdd !== currentPdd) {
+          customFields[LATEST_PDD_FIELD] = newPdd;
+          if (currentPdd) {
+            console.log(`🗓️ Latest PDD updated for ${issue.key}: ${currentPdd} -> ${newPdd}`);
           } else {
-            console.log(`🗓️ Latest PDD set for ${issue.key}: ${newEdd}`);
+            console.log(`🗓️ Latest PDD set for ${issue.key}: ${newPdd}`);
           }
-        } else if (newEdd && newEdd === currentEdd) {
-          console.log(`🗓️ Latest PDD unchanged for ${issue.key}: ${currentEdd}`);
+        } else if (newPdd && newPdd === currentPdd) {
+          console.log(`🗓️ Latest PDD unchanged for ${issue.key}: ${currentPdd}`);
         }
       } else {
         console.log(`🗓️ No forward PDD present in payload for ${issue.key}; skipping Latest PDD.`);
