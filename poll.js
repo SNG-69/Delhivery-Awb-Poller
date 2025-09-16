@@ -22,8 +22,11 @@ const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d71
 // Write latest Delhivery instruction into this Jira field (short plain text)
 const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments"
 
-// NEW: Out for Delivery Date (date picker)
+// NEW: Out for Delivery Date (date picker) — now write-once
 const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
+
+// NEW: Promised Delivery Date (forward EDD) — Date Picker, write-once
+const PROMISED_DELIVERY_DATE_FIELD = 'customfield_10354';
 
 // Diagnostics / knobs
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
@@ -449,6 +452,22 @@ const run = async () => {
       // Always prepare possible field updates (dates + latest instruction) BEFORE the skip check
       let customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
+      // === Promised Delivery Date (one-time) ===
+      // Only set if Jira field is currently empty. Uses forward PromisedDeliveryDate from payload.
+      const existingPDD = issue.fields?.[PROMISED_DELIVERY_DATE_FIELD];
+      if (!existingPDD) {
+        const rawPDD = tracking?.PromisedDeliveryDate; // e.g., "2025-09-14T23:59:59"
+        if (rawPDD) {
+          const pdd = dayjs(rawPDD).isValid() ? dayjs(rawPDD).format('YYYY-MM-DD') : null;
+          if (pdd) {
+            customFields[PROMISED_DELIVERY_DATE_FIELD] = pdd;
+            console.log(`🗓️ Promised Delivery Date (forward) prepared for ${issue.key}: ${pdd}`);
+          }
+        }
+      } else {
+        console.log(`🗓️ Promised Delivery Date already set for ${issue.key} (${existingPDD}); not overwriting.`);
+      }
+
       // Grab the most recent instruction (prefers top-level Status.Instructions)
       const latestIns = getLatestInstruction(tracking);
       if (latestIns) {
@@ -464,33 +483,40 @@ const run = async () => {
           console.log(`ℹ️ Instruction computed empty for ${issue.key}`);
         }
 
-        // (B) If instruction says "Out for delivery", set the OFD date (YYYY-MM-DD)
-        if (/out for delivery/i.test(instrOnly)) {
+        // === Out for Delivery Date (one-time) — from INSTRUCTION ===
+        // If instruction says "Out for delivery" and field is empty, set it once.
+        const existingOFD = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD];
+        if (!existingOFD && /out for delivery/i.test(instrOnly)) {
           const whenFromInstr = getOFDWhen(tracking, latestIns);
           if (whenFromInstr) {
             const ofdDate = dayjs(whenFromInstr).format('YYYY-MM-DD');
-            const currentOfd = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD] || '';
-            if (ofdDate && currentOfd !== ofdDate) {
+            if (ofdDate) {
               customFields[OUT_FOR_DELIVERY_DATE_FIELD] = ofdDate;
-              console.log(`🚚 Out-for-delivery date set from INSTRUCTION for ${issue.key}: ${ofdDate}`);
+              console.log(`🚚 Out-for-delivery date (write-once) set from INSTRUCTION for ${issue.key}: ${ofdDate}`);
             }
           }
+        } else if (existingOFD) {
+          console.log(`🚚 Out-for-delivery date already set for ${issue.key} (${existingOFD}); not overwriting.`);
         }
       } else {
         console.log(`ℹ️ No instruction found in payload for ${issue.key}`);
       }
 
-      // NEW: If the computed status is "OUT FOR DELIVERY", also set the OFD date (even if the instruction didn't match)
-      if (updatedStatus === 'OUT FOR DELIVERY') {
+      // === Out for Delivery Date (one-time) — from STATUS fallback ===
+      // If computed status is OFD and field is empty, set it once (even if instruction didn't match).
+      const existingOFD2 = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD];
+      if (!existingOFD2 && updatedStatus === 'OUT FOR DELIVERY') {
         const whenFromStatus = getOFDWhen(tracking, latestIns);
         if (whenFromStatus) {
           const ofdDate = dayjs(whenFromStatus).format('YYYY-MM-DD');
-          const currentOfd = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD] || '';
-          if (ofdDate && currentOfd !== ofdDate) {
+          if (ofdDate) {
             customFields[OUT_FOR_DELIVERY_DATE_FIELD] = ofdDate;
-            console.log(`🚚 Out-for-delivery date set from STATUS for ${issue.key}: ${ofdDate}`);
+            console.log(`🚚 Out-for-delivery date (write-once) set from STATUS for ${issue.key}: ${ofdDate}`);
           }
         }
+      } else if (existingOFD2) {
+        // log once here too in case the above branch didn't log
+        console.log(`🚚 Out-for-delivery date already set for ${issue.key} (${existingOFD2}); not overwriting.`);
       }
 
       // If status is unchanged, only push field updates (if any), then skip transition
