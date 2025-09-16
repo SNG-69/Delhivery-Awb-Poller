@@ -28,7 +28,7 @@ const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
 // Promised Delivery Date (forward EDD) — write-once
 const PROMISED_DELIVERY_DATE_FIELD = 'customfield_10354';
 
-// NEW: RTO fields
+// NEW: RTO fields (write-once)
 const RTO_REASON_FIELD = 'customfield_10355';          // Short text
 const RTO_INITIATED_DATE_FIELD = 'customfield_10356';  // Date Picker
 
@@ -68,6 +68,18 @@ const JIRA_STATUS_ALIASES = {
   'DELIVERED': ['DELIVERED','Delivered'],
   'RTO DELIVERED': ['RTO DELIVERED','RETURN DELIVERED','Return Delivered']
 };
+
+// --- Verified-cancellation triggers (edit this list in one place) ---
+const VERIFIED_CXL_PHRASES = [
+  'whatsapp verified cancellation',
+  'code verified cancellation',
+  'consignee refused to accept/order cancelled'
+  // add more here as needed...
+];
+const VERIFIED_CXL_RE = new RegExp(
+  VERIFIED_CXL_PHRASES.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+  'i'
+);
 
 // ---------- Utils ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -294,12 +306,10 @@ const interpretStatus = (t) => {
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark verified')) return 'IN - TRANSIT';
 
-  // 5) Heuristics implying RTO
-  if (instructions.includes('whatsapp verified cancellation')) return 'RTO IN - TRANSIT';
-  if (instructions.includes('code verified cancellation')) return 'RTO IN - TRANSIT';
+  // 5) Heuristics implying RTO (centralized)
+  if (VERIFIED_CXL_RE.test(instructions)) return 'RTO IN - TRANSIT';
   if (instructions.includes('dispatched for rto')) return 'RTO IN - TRANSIT';
   if (instructions.includes('return accepted')) return 'RTO DELIVERED';
-  if (instructions.includes('consignee refused to accept/order cancelled')) return 'RTO IN - TRANSIT';
   if (instructions.includes('not attempted')) return 'NDR';
   if (instructions.includes('maximum attempts reached')) return 'IN - TRANSIT';
   if (instructions.includes('package missing in audit')) return 'IN - TRANSIT';
@@ -393,12 +403,12 @@ const getOFDWhen = (tracking, latestIns) => {
   return tracking?.Status?.StatusDateTime || null;
 };
 
-// Find earliest "verified cancellation" (WhatsApp or Code)
+// Find earliest "verified cancellation" based on the trigger list
 const findVerifiedCancellation = (t) => {
   const scans = Array.isArray(t?.Scans) ? t.Scans : [];
   const matches = scans
     .map(s => s?.ScanDetail || {})
-    .filter(sd => /whatsapp verified cancellation|code verified cancellation/i.test(String(sd.Instructions || '')))
+    .filter(sd => VERIFIED_CXL_RE.test(String(sd.Instructions || '')))
     .sort((a, b) => new Date(a.StatusDateTime || a.ScanDateTime || 0) - new Date(b.StatusDateTime || b.ScanDateTime || 0));
   return matches[0] || null;
 };
@@ -488,7 +498,6 @@ const run = async () => {
         const when = cancelEvent.StatusDateTime || cancelEvent.ScanDateTime;
         const dateYmd = when ? dayjs(when).format('YYYY-MM-DD') : null;
 
-        // Write-once guards:
         const currentReason = issue.fields?.[RTO_REASON_FIELD];
         const currentRtoDate = issue.fields?.[RTO_INITIATED_DATE_FIELD];
 
@@ -506,7 +515,7 @@ const run = async () => {
           console.log(`📅 RTO Initiated Date already set for ${issue.key} (${currentRtoDate}); not overwriting.`);
         }
       } else {
-        console.log(`ℹ️ No verified cancellation (WhatsApp/Code) found for ${issue.key}`);
+        console.log(`ℹ️ No verified cancellation match found for ${issue.key}`);
       }
 
       // Grab the most recent instruction (prefers top-level Status.Instructions)
