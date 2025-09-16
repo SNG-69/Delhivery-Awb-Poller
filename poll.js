@@ -28,6 +28,9 @@ const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
 // Promised Delivery Date (forward EDD) — write-once
 const PROMISED_DELIVERY_DATE_FIELD = 'customfield_10354';
 
+// NEW: Latest EDD (forward) — overwrite allowed (ExpectedDeliveryDate || PromisedDeliveryDate)
+const LATEST_EDD_FIELD = 'customfield_10357';
+
 // NEW: RTO fields (write-once)
 const RTO_REASON_FIELD = 'customfield_10355';          // Short text
 const RTO_INITIATED_DATE_FIELD = 'customfield_10356';  // Date Picker
@@ -305,6 +308,8 @@ const interpretStatus = (t) => {
   if (instructions.includes('arriving today')) return 'IN - TRANSIT';
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark verified')) return 'IN - TRANSIT';
+  if (instructions.includes('reattempt as per client's instruction')) return 'IN - TRANSIT';
+  if (instructions.includes('payment Mode / amt dispute')) return 'IN - TRANSIT';
 
   // 5) Heuristics implying RTO (centralized)
   if (VERIFIED_CXL_RE.test(instructions)) return 'RTO IN - TRANSIT';
@@ -476,7 +481,7 @@ const run = async () => {
       // Always prepare possible field updates (dates + latest instruction) BEFORE the skip check
       let customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
-      // === Promised Delivery Date (one-time) ===
+      // === Promised Delivery Date (one-time, forward) ===
       const existingPDD = issue.fields?.[PROMISED_DELIVERY_DATE_FIELD];
       if (!existingPDD) {
         const rawPDD = tracking?.PromisedDeliveryDate; // e.g., "2025-09-14T23:59:59"
@@ -489,6 +494,26 @@ const run = async () => {
         }
       } else {
         console.log(`🗓️ Promised Delivery Date already set for ${issue.key} (${existingPDD}); not overwriting.`);
+      }
+
+      // === Latest EDD (overwrite allowed, forward) ===
+      // Prefer ExpectedDeliveryDate; fallback to PromisedDeliveryDate
+      const rawLatestEDD = tracking?.ExpectedDeliveryDate || tracking?.PromisedDeliveryDate || null;
+      if (rawLatestEDD) {
+        const newEdd = dayjs(rawLatestEDD).isValid() ? dayjs(rawLatestEDD).format('YYYY-MM-DD') : null;
+        const currentEdd = issue.fields?.[LATEST_EDD_FIELD] || null;
+        if (newEdd && newEdd !== currentEdd) {
+          customFields[LATEST_EDD_FIELD] = newEdd;
+          if (currentEdd) {
+            console.log(`🗓️ Latest EDD updated for ${issue.key}: ${currentEdd} -> ${newEdd}`);
+          } else {
+            console.log(`🗓️ Latest EDD set for ${issue.key}: ${newEdd}`);
+          }
+        } else if (newEdd && newEdd === currentEdd) {
+          console.log(`🗓️ Latest EDD unchanged for ${issue.key}: ${currentEdd}`);
+        }
+      } else {
+        console.log(`🗓️ No forward EDD/PDD present in payload for ${issue.key}; skipping Latest EDD.`);
       }
 
       // === RTO Reason & Initiated Date (write-once) ===
