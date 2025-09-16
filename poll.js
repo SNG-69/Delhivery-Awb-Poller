@@ -497,24 +497,24 @@ const run = async () => {
         console.log(`🗓️ Promised Delivery Date already set for ${issue.key} (${existingPDD}); not overwriting.`);
       }
 
-      // === Latest EDD (overwrite allowed, forward) ===
+      // === Latest PDD (overwrite allowed, forward) ===
       // Prefer ExpectedDeliveryDate; fallback to PromisedDeliveryDate
       const rawLatestEDD = tracking?.ExpectedDeliveryDate || tracking?.PromisedDeliveryDate || null;
-      if (rawLatestEDD) {
+      if (rawLatestPDD) {
         const newEdd = dayjs(rawLatestEDD).isValid() ? dayjs(rawLatestEDD).format('YYYY-MM-DD') : null;
         const currentEdd = issue.fields?.[LATEST_EDD_FIELD] || null;
         if (newEdd && newEdd !== currentEdd) {
-          customFields[LATEST_EDD_FIELD] = newEdd;
+          customFields[LATEST_PDD_FIELD] = newEdd;
           if (currentEdd) {
-            console.log(`🗓️ Latest EDD updated for ${issue.key}: ${currentEdd} -> ${newEdd}`);
+            console.log(`🗓️ Latest PDD updated for ${issue.key}: ${currentEdd} -> ${newEdd}`);
           } else {
-            console.log(`🗓️ Latest EDD set for ${issue.key}: ${newEdd}`);
+            console.log(`🗓️ Latest PDD set for ${issue.key}: ${newEdd}`);
           }
         } else if (newEdd && newEdd === currentEdd) {
-          console.log(`🗓️ Latest EDD unchanged for ${issue.key}: ${currentEdd}`);
+          console.log(`🗓️ Latest PDD unchanged for ${issue.key}: ${currentEdd}`);
         }
       } else {
-        console.log(`🗓️ No forward EDD/PDD present in payload for ${issue.key}; skipping Latest EDD.`);
+        console.log(`🗓️ No forward PDD present in payload for ${issue.key}; skipping Latest PDD.`);
       }
 
       // === RTO Reason & Initiated Date (write-once) ===
