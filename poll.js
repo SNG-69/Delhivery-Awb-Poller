@@ -308,7 +308,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('arriving today')) return 'IN - TRANSIT';
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark verified')) return 'IN - TRANSIT';
-  if (instructions.includes('reattempt as per client's instruction')) return 'IN - TRANSIT';
+  if (instructions.includes('reattempt as per clients instruction')) return 'IN - TRANSIT';
   if (instructions.includes('payment Mode / amt dispute')) return 'IN - TRANSIT';
 
   // 5) Heuristics implying RTO (centralized)
