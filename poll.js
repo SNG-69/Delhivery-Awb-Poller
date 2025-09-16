@@ -22,11 +22,15 @@ const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d71
 // Write latest Delhivery instruction into this Jira field (short plain text)
 const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments"
 
-// NEW: Out for Delivery Date (date picker) — now write-once
+// Out for Delivery Date (date picker) — write-once
 const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
 
-// NEW: Promised Delivery Date (forward EDD) — Date Picker, write-once
+// Promised Delivery Date (forward EDD) — write-once
 const PROMISED_DELIVERY_DATE_FIELD = 'customfield_10354';
+
+// NEW: RTO fields
+const RTO_REASON_FIELD = 'customfield_10355';          // Short text
+const RTO_INITIATED_DATE_FIELD = 'customfield_10356';  // Date Picker
 
 // Diagnostics / knobs
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
@@ -389,6 +393,16 @@ const getOFDWhen = (tracking, latestIns) => {
   return tracking?.Status?.StatusDateTime || null;
 };
 
+// Find earliest "verified cancellation" (WhatsApp or Code)
+const findVerifiedCancellation = (t) => {
+  const scans = Array.isArray(t?.Scans) ? t.Scans : [];
+  const matches = scans
+    .map(s => s?.ScanDetail || {})
+    .filter(sd => /whatsapp verified cancellation|code verified cancellation/i.test(String(sd.Instructions || '')))
+    .sort((a, b) => new Date(a.StatusDateTime || a.ScanDateTime || 0) - new Date(b.StatusDateTime || b.ScanDateTime || 0));
+  return matches[0] || null;
+};
+
 // ---------- Issues ----------
 const getJiraIssues = async () => {
   const since = dayjs().subtract(CREATED_SINCE_DAYS, 'day').format('YYYY-MM-DD');
@@ -453,7 +467,6 @@ const run = async () => {
       let customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
       // === Promised Delivery Date (one-time) ===
-      // Only set if Jira field is currently empty. Uses forward PromisedDeliveryDate from payload.
       const existingPDD = issue.fields?.[PROMISED_DELIVERY_DATE_FIELD];
       if (!existingPDD) {
         const rawPDD = tracking?.PromisedDeliveryDate; // e.g., "2025-09-14T23:59:59"
@@ -466,6 +479,34 @@ const run = async () => {
         }
       } else {
         console.log(`🗓️ Promised Delivery Date already set for ${issue.key} (${existingPDD}); not overwriting.`);
+      }
+
+      // === RTO Reason & Initiated Date (write-once) ===
+      const cancelEvent = findVerifiedCancellation(tracking);
+      if (cancelEvent) {
+        const reasonText = String(cancelEvent.Instructions || '').trim();
+        const when = cancelEvent.StatusDateTime || cancelEvent.ScanDateTime;
+        const dateYmd = when ? dayjs(when).format('YYYY-MM-DD') : null;
+
+        // Write-once guards:
+        const currentReason = issue.fields?.[RTO_REASON_FIELD];
+        const currentRtoDate = issue.fields?.[RTO_INITIATED_DATE_FIELD];
+
+        if (!currentReason && reasonText) {
+          customFields[RTO_REASON_FIELD] = reasonText;
+          console.log(`🏷️ RTO Reason (write-once) set for ${issue.key}: ${reasonText}`);
+        } else if (currentReason) {
+          console.log(`🏷️ RTO Reason already set for ${issue.key} (${currentReason}); not overwriting.`);
+        }
+
+        if (!currentRtoDate && dateYmd) {
+          customFields[RTO_INITIATED_DATE_FIELD] = dateYmd;
+          console.log(`📅 RTO Initiated Date (write-once) set for ${issue.key}: ${dateYmd}`);
+        } else if (currentRtoDate) {
+          console.log(`📅 RTO Initiated Date already set for ${issue.key} (${currentRtoDate}); not overwriting.`);
+        }
+      } else {
+        console.log(`ℹ️ No verified cancellation (WhatsApp/Code) found for ${issue.key}`);
       }
 
       // Grab the most recent instruction (prefers top-level Status.Instructions)
@@ -483,8 +524,7 @@ const run = async () => {
           console.log(`ℹ️ Instruction computed empty for ${issue.key}`);
         }
 
-        // === Out for Delivery Date (one-time) — from INSTRUCTION ===
-        // If instruction says "Out for delivery" and field is empty, set it once.
+        // === Out for Delivery Date (one-time) — from INSTRUCTION
         const existingOFD = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD];
         if (!existingOFD && /out for delivery/i.test(instrOnly)) {
           const whenFromInstr = getOFDWhen(tracking, latestIns);
@@ -502,8 +542,7 @@ const run = async () => {
         console.log(`ℹ️ No instruction found in payload for ${issue.key}`);
       }
 
-      // === Out for Delivery Date (one-time) — from STATUS fallback ===
-      // If computed status is OFD and field is empty, set it once (even if instruction didn't match).
+      // === Out for Delivery Date (one-time) — from STATUS fallback
       const existingOFD2 = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD];
       if (!existingOFD2 && updatedStatus === 'OUT FOR DELIVERY') {
         const whenFromStatus = getOFDWhen(tracking, latestIns);
@@ -515,7 +554,6 @@ const run = async () => {
           }
         }
       } else if (existingOFD2) {
-        // log once here too in case the above branch didn't log
         console.log(`🚚 Out-for-delivery date already set for ${issue.key} (${existingOFD2}); not overwriting.`);
       }
 
