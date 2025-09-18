@@ -483,24 +483,24 @@ function buildTrackingCfExpr() {
 
 function buildJqlPickup(sinceYmd) {
   const cfExpr = buildTrackingCfExpr();
-  return [
+  const cond = [
     `project = ${JIRA_PROJECT}`,
     `${cfExpr} IS NOT EMPTY`,
     `created >= ${sinceYmd}`,
-    `status = "PICKUP SCHEDULED"`,
-    `ORDER BY updated DESC`
+    `status = "PICKUP SCHEDULED"`
   ].join(' AND ');
+  return `${cond} ORDER BY updated DESC`;
 }
 
 function buildJqlOthers(sinceYmd) {
   const cfExpr = buildTrackingCfExpr();
-  return [
+  const cond = [
     `project = ${JIRA_PROJECT}`,
     `${cfExpr} IS NOT EMPTY`,
     `created >= ${sinceYmd}`,
-    `status NOT IN ("RTO DELIVERED","PICKUP SCHEDULED")`,
-    `ORDER BY updated DESC`
+    `status NOT IN ("RTO DELIVERED","PICKUP SCHEDULED")`
   ].join(' AND ');
+  return `${cond} ORDER BY updated DESC`;
 }
 
 // ---------- Issues ----------
