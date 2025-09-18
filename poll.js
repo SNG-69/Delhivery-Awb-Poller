@@ -72,12 +72,11 @@ const JIRA_STATUS_ALIASES = {
   'RTO DELIVERED': ['RTO DELIVERED','RETURN DELIVERED','Return Delivered']
 };
 
-// --- Verified-cancellation triggers (edit this list in one place) ---
+// --- Verified-cancellation triggers ---
 const VERIFIED_CXL_PHRASES = [
   'whatsapp verified cancellation',
   'code verified cancellation',
   'consignee refused to accept/order cancelled'
-  // add more here as needed...
 ];
 const VERIFIED_CXL_RE = new RegExp(
   VERIFIED_CXL_PHRASES.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
@@ -94,7 +93,7 @@ const toCfIdExpr = (customfield) => {
   return m ? `cf[${m[1]}]` : null;
 };
 
-// ---------- Jira search helpers (POST-first with v2 fallback) ----------
+// ---------- Jira helpers ----------
 const jiraBase = () => (JIRA_DOMAIN || '').replace(/\/+$/, '');
 const jiraAuth = { username: JIRA_EMAIL, password: JIRA_API_TOKEN };
 
@@ -109,28 +108,38 @@ const jiraAxiosCfg = {
   validateStatus: s => s >= 200 && s < 300
 };
 
-async function jiraSearchPOST({ jql, startAt = 0, maxResults = 50 }) {
-  const base = jiraBase();
-  const urlV3 = `${base}/rest/api/3/search`;
-  const urlV2 = `${base}/rest/api/2/search`;
-  const body = { jql, startAt, maxResults };
+// Fields the enhanced endpoint must return for our logic
+const REQUIRED_FIELDS = [
+  'status',
+  TRACKING_FIELD,
+  PROMISED_DELIVERY_DATE_FIELD,
+  LATEST_PDD_FIELD,
+  DISPATCH_DATE_FIELD,
+  DELIVERY_DATE_FIELD,
+  RTO_DELIVERED_DATE_FIELD,
+  RTO_REASON_FIELD,
+  RTO_INITIATED_DATE_FIELD,
+  OUT_FOR_DELIVERY_DATE_FIELD
+].filter(Boolean);
+
+// Enhanced Search (NEW): POST /rest/api/3/search/jql with nextPageToken pagination
+async function jiraSearchJQL({ jql, nextPageToken = null, maxResults = 50 }) {
+  const url = `${jiraBase()}/rest/api/3/search/jql`;
+  const body = {
+    jql,
+    maxResults,
+    nextPageToken: nextPageToken || undefined,
+    fields: REQUIRED_FIELDS,
+    fieldsByKeys: true
+  };
 
   try {
-    return (await axios.post(urlV3, body, jiraAxiosCfg)).data;
+    const { data } = await axios.post(url, body, jiraAxiosCfg);
+    return data;
   } catch (e) {
     const status = e?.response?.status;
     const data = e?.response?.data;
-    console.error('Jira v3 POST search failed', { status, data });
-    if (status === 410 || status === 404 || status === 405) {
-      try {
-        return (await axios.post(urlV2, body, jiraAxiosCfg)).data;
-      } catch (e2) {
-        const s2 = e2?.response?.status;
-        const d2 = e2?.response?.data;
-        console.error('Jira v2 POST search also failed', { status: s2, data: d2 });
-        throw e2;
-      }
-    }
+    console.error('❌ Jira enhanced search failed', { status, data });
     throw e;
   }
 }
@@ -443,22 +452,25 @@ const findVerifiedCancellation = (t) => {
   return matches[0] || null;
 };
 
-// ---------- Jira issue search (replaces GET /rest/api/3/search) ----------
+// ---------- Jira issue search (ENHANCED) ----------
 const fetchAllIssues = async (jql) => {
   const all = [];
-  let startAt = 0;
   const pageSize = 50; // Jira Cloud safe
+  let nextPageToken = null;
 
   while (true) {
-    const data = await jiraSearchPOST({ jql, startAt, maxResults: pageSize });
+    const data = await jiraSearchJQL({
+      jql,
+      nextPageToken,
+      maxResults: pageSize
+    });
+
     const issues = data?.issues || [];
     all.push(...issues);
 
-    const nextStart = (data.startAt || 0) + issues.length;
-    const total = data.total ?? nextStart;
-
-    if (issues.length === 0 || nextStart >= total) break;
-    startAt = nextStart;
+    // Enhanced pagination: stop when isLast or no token returned.
+    if (data?.isLast || !data?.nextPageToken || issues.length === 0) break;
+    nextPageToken = data.nextPageToken;
   }
   return all;
 };
@@ -471,7 +483,6 @@ function buildTrackingCfExpr() {
 
 function buildJqlPickup(sinceYmd) {
   const cfExpr = buildTrackingCfExpr();
-  // Unquoted date avoids locale quirks; status with quotes is fine.
   return [
     `project = ${JIRA_PROJECT}`,
     `${cfExpr} IS NOT EMPTY`,
@@ -542,7 +553,11 @@ const run = async () => {
 
       // Classify
       const updatedStatus = interpretStatus(tracking);
-      console.log(`[decision] ${issue.key} awb=${awb} cur="${currentStatus}" -> new="${updatedStatus}" type=${(tracking.Status?.StatusType||tracking.Status?.ScanType)||""} reverse=${!!tracking.ReverseInTransit} rtoStart=${!!tracking.RTOStartedDate} hasRTScan=${hasRecentRTScan(tracking)}`);
+      console.log(
+        `[decision] ${issue.key} awb=${awb} cur="${currentStatus}" -> new="${updatedStatus}" ` +
+        `type=${(tracking.Status?.StatusType||tracking.Status?.ScanType)||""} ` +
+        `reverse=${!!tracking.ReverseInTransit} rtoStart=${!!tracking.RTOStartedDate} hasRTScan=${hasRecentRTScan(tracking)}`
+      );
 
       if (!updatedStatus) {
         console.log(`⚠️ Unknown status "${tracking.Status?.Status}" for AWB ${awb}`);
@@ -568,7 +583,6 @@ const run = async () => {
       }
 
       // === Latest PDD (overwrite allowed, forward) ===
-      // Prefer ExpectedDeliveryDate; fallback to PromisedDeliveryDate
       const rawLatestPDD = tracking?.ExpectedDeliveryDate || tracking?.PromisedDeliveryDate || null;
       if (rawLatestPDD) {
         const newPdd = dayjs(rawLatestPDD).isValid() ? dayjs(rawLatestPDD).format('YYYY-MM-DD') : null;
@@ -617,7 +631,6 @@ const run = async () => {
       // Grab the most recent instruction (prefers top-level Status.Instructions)
       const latestIns = getLatestInstruction(tracking);
       if (latestIns) {
-        // (A) Write only the instruction text (no quotes / no extras)
         const instrOnly = latestIns.instruction || '';
         const currentInstr = issue.fields?.[LATEST_INSTRUCTION_FIELD] || '';
         if (instrOnly && currentInstr !== instrOnly) {
@@ -672,7 +685,7 @@ const run = async () => {
         continue;
       }
 
-      // Build your original single-line comment (unchanged logic)
+      // Comment (unchanged)
       let comment = null;
       switch (updatedStatus) {
         case 'IN - TRANSIT': comment = `Order is now in transit as of ${new Date().toISOString()}`; break;
@@ -685,7 +698,6 @@ const run = async () => {
         case 'OUT FOR DELIVERY': comment = `Order is out for delivery as of ${new Date().toISOString()}`; break;
       }
 
-      // Transition + fields + (original) comment + post-delivery assignment
       await updateJira(issue.key, updatedStatus, customFields, comment);
       updated++;
 
