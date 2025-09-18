@@ -88,22 +88,52 @@ const VERIFIED_CXL_RE = new RegExp(
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const nameNorm = (s) => (s || '').toLowerCase().replace(/[\s_\-]+/g, '');
 
-const findTransitionByName = (transitions, target) => {
-  const targets = (JIRA_STATUS_ALIASES[target] || [target]).map(nameNorm);
-  const exact = transitions.find(t => targets.includes(nameNorm(t.to?.name)));
-  if (exact) return exact;
-
-  // Fuzzy fallback: for RTO we accept any status containing both "rto" and "transit"
-  const targetNorm = nameNorm(target);
-  if (targetNorm.includes('rtointransit')) {
-    const fuzzy = transitions.find(t => {
-      const n = nameNorm(t.to?.name);
-      return n.includes('rto') && n.includes('transit');
-    });
-    if (fuzzy) return fuzzy;
-  }
-  return null;
+// Convert "customfield_10123" -> "cf[10123]" for bulletproof JQL
+const toCfIdExpr = (customfield) => {
+  const m = (customfield || '').match(/customfield_(\d+)/);
+  return m ? `cf[${m[1]}]` : null;
 };
+
+// ---------- Jira search helpers (POST-first with v2 fallback) ----------
+const jiraBase = () => (JIRA_DOMAIN || '').replace(/\/+$/, '');
+const jiraAuth = { username: JIRA_EMAIL, password: JIRA_API_TOKEN };
+
+const jiraAxiosCfg = {
+  timeout: 20000,
+  headers: {
+    'User-Agent': 'instasport-delhivery-jira-sync/1.2',
+    'Accept': 'application/json',
+    'Content-Type': 'application/json'
+  },
+  auth: jiraAuth,
+  validateStatus: s => s >= 200 && s < 300
+};
+
+async function jiraSearchPOST({ jql, startAt = 0, maxResults = 50 }) {
+  const base = jiraBase();
+  const urlV3 = `${base}/rest/api/3/search`;
+  const urlV2 = `${base}/rest/api/2/search`;
+  const body = { jql, startAt, maxResults };
+
+  try {
+    return (await axios.post(urlV3, body, jiraAxiosCfg)).data;
+  } catch (e) {
+    const status = e?.response?.status;
+    const data = e?.response?.data;
+    console.error('Jira v3 POST search failed', { status, data });
+    if (status === 410 || status === 404 || status === 405) {
+      try {
+        return (await axios.post(urlV2, body, jiraAxiosCfg)).data;
+      } catch (e2) {
+        const s2 = e2?.response?.status;
+        const d2 = e2?.response?.data;
+        console.error('Jira v2 POST search also failed', { status: s2, data: d2 });
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
 
 // ---------- Extract AWB ----------
 const extractAWB = (v) => {
@@ -148,38 +178,15 @@ const getTracking = async (awb) => {
   });
 };
 
-// ---------- Jira ----------
-const fetchAllIssues = async (jql) => {
-  const all = [];
-  let startAt = 0;
-  const pageSize = 50; // Jira Cloud safe
-
-  while (true) {
-    const { data } = await axios.get(`${JIRA_DOMAIN}/rest/api/3/search`, {
-      params: { jql, startAt, maxResults: pageSize },
-      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
-    });
-
-    const issues = data.issues || [];
-    all.push(...issues);
-
-    const nextStart = (data.startAt || 0) + issues.length;
-    const total = data.total ?? nextStart;
-
-    if (issues.length === 0 || nextStart >= total) break;
-    startAt = nextStart;
-  }
-  return all;
-};
-
+// ---------- Jira (comments, transitions, updates) ----------
 const postCommentADF = async (issueKey, commentText) => {
   if (!commentText) return;
   const payload = {
     body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: commentText }] }] }
   };
   try {
-    await axios.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/comment`, payload, {
-      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
+    await axios.post(`${jiraBase()}/rest/api/3/issue/${issueKey}/comment`, payload, {
+      auth: jiraAuth
     });
     console.log(`💬 Comment added to ${issueKey}`);
   } catch (err) {
@@ -187,10 +194,27 @@ const postCommentADF = async (issueKey, commentText) => {
   }
 };
 
+const findTransitionByName = (transitions, target) => {
+  const targets = (JIRA_STATUS_ALIASES[target] || [target]).map(nameNorm);
+  const exact = transitions.find(t => targets.includes(nameNorm(t.to?.name)));
+  if (exact) return exact;
+
+  // Fuzzy fallback: for RTO we accept any status containing both "rto" and "transit"
+  const targetNorm = nameNorm(target);
+  if (targetNorm.includes('rtointransit')) {
+    const fuzzy = transitions.find(t => {
+      const n = nameNorm(t.to?.name);
+      return n.includes('rto') && n.includes('transit');
+    });
+    if (fuzzy) return fuzzy;
+  }
+  return null;
+};
+
 const updateJira = async (issueKey, newStatus, customFields = {}, comment = null) => {
   try {
-    const transitionRes = await axios.get(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
-      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
+    const transitionRes = await axios.get(`${jiraBase()}/rest/api/3/issue/${issueKey}/transitions`, {
+      auth: jiraAuth
     });
 
     if (LOG_TRANSITIONS) {
@@ -204,23 +228,23 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
       return; // bail early — don’t write fields/comments if we didn’t move
     }
 
-    await axios.post(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/transitions`, {
+    await axios.post(`${jiraBase()}/rest/api/3/issue/${issueKey}/transitions`, {
       transition: { id: transition.id }
-    }, { auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN } });
+    }, { auth: jiraAuth });
 
     console.log(`✅ Status updated to "${newStatus}" for ${issueKey}`);
 
     if (Object.keys(customFields).length > 0) {
-      await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}`, { fields: customFields }, {
-        auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
+      await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields: customFields }, {
+        auth: jiraAuth
       });
       console.log(`🛠️ Custom fields updated for ${issueKey}`);
     }
 
     if (["DELIVERED", "RTO DELIVERED"].includes(newStatus)) {
-      await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}/assignee`, {
+      await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}/assignee`, {
         accountId: POST_DELIVERY_ASSIGNEE
-      }, { auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN } });
+      }, { auth: jiraAuth });
       console.log(`👤 Assigned ${issueKey} to post-delivery assignee`);
     }
 
@@ -237,8 +261,8 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
 const updateJiraFieldsOnly = async (issueKey, fields) => {
   if (!fields || Object.keys(fields).length === 0) return;
   try {
-    await axios.put(`${JIRA_DOMAIN}/rest/api/3/issue/${issueKey}`, { fields }, {
-      auth: { username: JIRA_EMAIL, password: JIRA_API_TOKEN }
+    await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields }, {
+      auth: jiraAuth
     });
     console.log(`📝 Fields updated for ${issueKey} (no transition)`);
   } catch (err) {
@@ -419,12 +443,58 @@ const findVerifiedCancellation = (t) => {
   return matches[0] || null;
 };
 
+// ---------- Jira issue search (replaces GET /rest/api/3/search) ----------
+const fetchAllIssues = async (jql) => {
+  const all = [];
+  let startAt = 0;
+  const pageSize = 50; // Jira Cloud safe
+
+  while (true) {
+    const data = await jiraSearchPOST({ jql, startAt, maxResults: pageSize });
+    const issues = data?.issues || [];
+    all.push(...issues);
+
+    const nextStart = (data.startAt || 0) + issues.length;
+    const total = data.total ?? nextStart;
+
+    if (issues.length === 0 || nextStart >= total) break;
+    startAt = nextStart;
+  }
+  return all;
+};
+
+// ---------- JQL builders using cf[ID] for the tracking field ----------
+function buildTrackingCfExpr() {
+  const cfExpr = toCfIdExpr(TRACKING_FIELD);
+  return cfExpr || `"Shipping Tracking Details"`; // fallback to display name if env missing
+}
+
+function buildJqlPickup(sinceYmd) {
+  const cfExpr = buildTrackingCfExpr();
+  // Unquoted date avoids locale quirks; status with quotes is fine.
+  return [
+    `project = ${JIRA_PROJECT}`,
+    `${cfExpr} IS NOT EMPTY`,
+    `created >= ${sinceYmd}`,
+    `status = "PICKUP SCHEDULED"`,
+    `ORDER BY updated DESC`
+  ].join(' AND ');
+}
+
+function buildJqlOthers(sinceYmd) {
+  const cfExpr = buildTrackingCfExpr();
+  return [
+    `project = ${JIRA_PROJECT}`,
+    `${cfExpr} IS NOT EMPTY`,
+    `created >= ${sinceYmd}`,
+    `status NOT IN ("RTO DELIVERED","PICKUP SCHEDULED")`,
+    `ORDER BY updated DESC`
+  ].join(' AND ');
+}
+
 // ---------- Issues ----------
 const getJiraIssues = async () => {
   const since = dayjs().subtract(CREATED_SINCE_DAYS, 'day').format('YYYY-MM-DD');
-
-  const jqlPickup = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status = "PICKUP SCHEDULED" ORDER BY updated DESC`;
-  const jqlOthers = `project = ${JIRA_PROJECT} AND "Shipping Tracking Details" IS NOT EMPTY AND created >= "${since}" AND status NOT IN ("RTO DELIVERED","PICKUP SCHEDULED") ORDER BY updated DESC`;
 
   if (DEBUG_ISSUE_KEY) {
     const single = await fetchAllIssues(`key = ${DEBUG_ISSUE_KEY}`);
@@ -432,10 +502,10 @@ const getJiraIssues = async () => {
   }
 
   console.log('📥 Fetching PICKUP SCHEDULED issues...');
-  const pickupIssues = await fetchAllIssues(jqlPickup);
+  const pickupIssues = await fetchAllIssues(buildJqlPickup(since));
 
   console.log('📥 Fetching other eligible issues...');
-  const otherIssues = await fetchAllIssues(jqlOthers);
+  const otherIssues = await fetchAllIssues(buildJqlOthers(since));
 
   return [...pickupIssues, ...otherIssues];
 };
