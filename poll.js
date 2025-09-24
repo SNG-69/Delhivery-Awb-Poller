@@ -345,6 +345,7 @@ const interpretStatus = (t) => {
   if (instructions.includes("center changed by system")) return 'IN - TRANSIT';
   if (instructions.includes("reattempt - as per ndr instructions")) return 'IN - TRANSIT';
   if (instructions.includes("service disruption")) return 'IN - TRANSIT';
+  if (instructions.includes("vehicle departed")) return 'IN - TRANSIT';
   if (instructions.includes('payment mode / amt dispute')) return 'IN - TRANSIT';
 
   // 5) Heuristics implying RTO (centralized)
@@ -359,6 +360,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('delayed due to weather conditions')) return 'IN - TRANSIT';
   if (instructions.includes('natural disaster')) return 'IN - TRANSIT';
   if (instructions.includes('ntd updated')) return 'RTO IN - TRANSIT';
+  if (instructions.includes('returned as per security instruction')) return 'RTO IN - TRANSIT';
   if (instructions.includes('recipient unavailable.establishment closed')) return 'RTO IN - TRANSIT';
 
   // 6) Fallback map
