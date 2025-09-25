@@ -344,6 +344,7 @@ const interpretStatus = (t) => {
   if (instructions.includes("reattempt as per client's instruction")) return 'IN - TRANSIT';
   if (instructions.includes("center changed by system")) return 'IN - TRANSIT';
   if (instructions.includes("reattempt - as per ndr instructions")) return 'IN - TRANSIT';
+  if (instructions.includes("package details changed by shipper")) return 'IN - TRANSIT';
   if (instructions.includes("service disruption")) return 'IN - TRANSIT';
   if (instructions.includes("vehicle departed")) return 'IN - TRANSIT';
   if (instructions.includes('payment mode / amt dispute')) return 'IN - TRANSIT';
