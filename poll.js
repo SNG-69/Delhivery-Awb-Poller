@@ -348,6 +348,7 @@ const interpretStatus = (t) => {
   if (instructions.includes("package details changed by shipper")) return 'IN - TRANSIT';
   if (instructions.includes("service disruption")) return 'IN - TRANSIT';
   if (instructions.includes("vehicle departed")) return 'IN - TRANSIT';
+  if (instructions.includes("shipment picked up")) return 'IN - TRANSIT';
   if (instructions.includes('payment mode / amt dispute')) return 'IN - TRANSIT';
 
   // 5) Heuristics implying RTO (centralized)
