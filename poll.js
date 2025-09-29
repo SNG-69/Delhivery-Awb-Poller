@@ -2,9 +2,11 @@ require('dotenv').config();
 const axios = require('axios');
 const dayjs = require('dayjs');
 
-// ---------- Config ----------
+/**
+ * ---------------- Config ----------------
+ */
 axios.defaults.timeout = 20000;
-axios.defaults.headers.common['User-Agent'] = 'instasport-delhivery-jira-sync/1.2';
+axios.defaults.headers.common['User-Agent'] = 'instasport-delhivery-jira-sync/1.3-fixed';
 
 // Env
 const DELHIVERY_TOKEN = process.env.DELHIVERY_TOKEN;
@@ -19,21 +21,13 @@ const DELIVERY_DATE_FIELD = process.env.CUSTOMFIELD_DELIVERY_DATE;
 const RTO_DELIVERED_DATE_FIELD = process.env.CUSTOMFIELD_RTO_DATE;
 const POST_DELIVERY_ASSIGNEE = process.env.POST_DELIVERY_ASSIGNEE || '712020:d710d4e8-270f-4d7a-b65a-7303f71783fb';
 
-// Write latest Delhivery instruction into this Jira field (short plain text)
+// Fixed field ids (as per your setup)
 const LATEST_INSTRUCTION_FIELD = 'customfield_10288'; // "Latest Delhivery Comments"
-
-// Out for Delivery Date (date picker) — write-once
 const OUT_FOR_DELIVERY_DATE_FIELD = 'customfield_10321';
-
-// Promised Delivery Date (forward EDD) — write-once
 const PROMISED_DELIVERY_DATE_FIELD = 'customfield_10354';
-
-// Latest PDD (forward) — overwrite allowed (ExpectedDeliveryDate || PromisedDeliveryDate)
 const LATEST_PDD_FIELD = 'customfield_10357';
-
-// RTO fields (write-once)
-const RTO_REASON_FIELD = 'customfield_10355';          // Short text
-const RTO_INITIATED_DATE_FIELD = 'customfield_10356';  // Date Picker
+const RTO_REASON_FIELD = 'customfield_10355';
+const RTO_INITIATED_DATE_FIELD = 'customfield_10356';
 
 // Diagnostics / knobs
 const CREATED_SINCE_DAYS = Number(process.env.CREATED_SINCE_DAYS || 45);
@@ -42,7 +36,32 @@ const DEBUG_AWB = process.env.DEBUG_AWB || '';                 // e.g. "29798810
 const LOG_TRANSITIONS = process.env.LOG_TRANSITIONS === '1';
 const SLEEP_MS = Number(process.env.SLEEP_MS || 200);
 
-// ---------- Mappings ----------
+/**
+ * ---------------- Guards ----------------
+ */
+function assertEnv() {
+  const req = [
+    ['DELHIVERY_TOKEN', DELHIVERY_TOKEN],
+    ['JIRA_DOMAIN', JIRA_DOMAIN],
+    ['JIRA_EMAIL', JIRA_EMAIL],
+    ['JIRA_API_TOKEN', JIRA_API_TOKEN],
+    ['JIRA_PROJECT', JIRA_PROJECT],
+    ['TRACKING_FIELD', TRACKING_FIELD],
+    ['DISPATCH_DATE_FIELD', DISPATCH_DATE_FIELD],
+    ['DELIVERY_DATE_FIELD', DELIVERY_DATE_FIELD],
+    ['RTO_DELIVERED_DATE_FIELD', RTO_DELIVERED_DATE_FIELD],
+  ];
+  const missing = req.filter(([k, v]) => !v).map(([k]) => k);
+  if (missing.length) {
+    console.error('❌ Missing required environment variables:', missing.join(', '));
+    process.exit(1);
+  }
+}
+assertEnv();
+
+/**
+ * ---------------- Mappings ----------------
+ */
 const STATUS_MAP = {
   'Ready for pickup': 'PICKUP SCHEDULED',
   'In Transit': 'IN - TRANSIT',
@@ -72,7 +91,7 @@ const JIRA_STATUS_ALIASES = {
   'RTO DELIVERED': ['RTO DELIVERED','RETURN DELIVERED','Return Delivered']
 };
 
-// --- Verified-cancellation triggers ---
+// Verified-cancellation triggers
 const VERIFIED_CXL_PHRASES = [
   'whatsapp verified cancellation',
   'code verified cancellation',
@@ -83,9 +102,11 @@ const VERIFIED_CXL_RE = new RegExp(
   'i'
 );
 
-// ---------- Utils ----------
+/**
+ * ---------------- Utils ----------------
+ */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const nameNorm = (s) => (s || '').toLowerCase().replace(/[\s_\-]+/g, '');
+const nameNorm = (s) => (s || '').toLowerCase().replace(/[\s_\-()]+/g, '');
 
 // Convert "customfield_10123" -> "cf[10123]" for bulletproof JQL
 const toCfIdExpr = (customfield) => {
@@ -93,14 +114,16 @@ const toCfIdExpr = (customfield) => {
   return m ? `cf[${m[1]}]` : null;
 };
 
-// ---------- Jira helpers ----------
+/**
+ * ---------------- Jira helpers ----------------
+ */
 const jiraBase = () => (JIRA_DOMAIN || '').replace(/\/+$/, '');
 const jiraAuth = { username: JIRA_EMAIL, password: JIRA_API_TOKEN };
 
 const jiraAxiosCfg = {
   timeout: 20000,
   headers: {
-    'User-Agent': 'instasport-delhivery-jira-sync/1.2',
+    'User-Agent': 'instasport-delhivery-jira-sync/1.3-fixed',
     'Accept': 'application/json',
     'Content-Type': 'application/json'
   },
@@ -108,7 +131,7 @@ const jiraAxiosCfg = {
   validateStatus: s => s >= 200 && s < 300
 };
 
-// Fields the enhanced endpoint must return for our logic
+// Fields the search must return for our logic
 const REQUIRED_FIELDS = [
   'status',
   TRACKING_FIELD,
@@ -119,11 +142,14 @@ const REQUIRED_FIELDS = [
   RTO_DELIVERED_DATE_FIELD,
   RTO_REASON_FIELD,
   RTO_INITIATED_DATE_FIELD,
-  OUT_FOR_DELIVERY_DATE_FIELD
+  OUT_FOR_DELIVERY_DATE_FIELD,
+  LATEST_INSTRUCTION_FIELD
 ].filter(Boolean);
 
-// Enhanced Search (NEW): POST /rest/api/3/search/jql with nextPageToken pagination
-async function jiraSearchJQL({ jql, nextPageToken = null, maxResults = 50 }) {
+/**
+ * Enhanced Search (new) – POST /rest/api/3/search/jql
+ */
+async function jiraSearchJQLEnhanced({ jql, nextPageToken = null, maxResults = 50 }) {
   const url = `${jiraBase()}/rest/api/3/search/jql`;
   const body = {
     jql,
@@ -132,19 +158,53 @@ async function jiraSearchJQL({ jql, nextPageToken = null, maxResults = 50 }) {
     fields: REQUIRED_FIELDS,
     fieldsByKeys: true
   };
+  const { data } = await axios.post(url, body, jiraAxiosCfg);
+  return data;
+}
 
-  try {
-    const { data } = await axios.post(url, body, jiraAxiosCfg);
-    return data;
-  } catch (e) {
-    const status = e?.response?.status;
-    const data = e?.response?.data;
-    console.error('❌ Jira enhanced search failed', { status, data });
-    throw e;
+/**
+ * Classic Search (fallback) – POST /rest/api/3/search with startAt/maxResults
+ */
+async function jiraSearchClassic({ jql, startAt = 0, maxResults = 50 }) {
+  const url = `${jiraBase()}/rest/api/3/search`;
+  const body = {
+    jql,
+    startAt,
+    maxResults,
+    fields: REQUIRED_FIELDS,
+    fieldsByKeys: true
+  };
+  const { data } = await axios.post(url, body, jiraAxiosCfg);
+  return data;
+}
+
+/**
+ * Wrapper: try enhanced search, fallback to classic
+ */
+async function jiraSearchJQL({ jql, nextPageToken = null, startAt = 0, maxResults = 50, prefer = 'enhanced' }) {
+  if (prefer === 'enhanced') {
+    try {
+      return await jiraSearchJQLEnhanced({ jql, nextPageToken, maxResults });
+    } catch (e) {
+      const status = e?.response?.status;
+      console.warn('⚠️ Enhanced search failed; falling back to classic.', status, e?.response?.data || e.message);
+      // Convert enhanced paging to classic startAt if needed (we simply ignore nextPageToken here).
+      return await jiraSearchClassic({ jql, startAt, maxResults });
+    }
+  } else {
+    try {
+      return await jiraSearchClassic({ jql, startAt, maxResults });
+    } catch (e) {
+      const status = e?.response?.status;
+      console.warn('⚠️ Classic search failed; trying enhanced.', status, e?.response?.data || e.message);
+      return await jiraSearchJQLEnhanced({ jql, nextPageToken, maxResults });
+    }
   }
 }
 
-// ---------- Extract AWB ----------
+/**
+ * ---------------- AWB extraction ----------------
+ */
 const extractAWB = (v) => {
   if (!v || typeof v !== 'string') return null;
   const s = v.trim();
@@ -161,7 +221,9 @@ const extractAWB = (v) => {
   return justDigits ? justDigits[1] : null;
 };
 
-// ---------- Retry ----------
+/**
+ * ---------------- Retry ----------------
+ */
 const retry = async (fn, retries = 3, delayMs = 1000) => {
   let errLast;
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -177,7 +239,9 @@ const retry = async (fn, retries = 3, delayMs = 1000) => {
   return null;
 };
 
-// ---------- Delhivery ----------
+/**
+ * ---------------- Delhivery ----------------
+ */
 const getTracking = async (awb) => {
   return await retry(async () => {
     const res = await axios.get(`https://track.delhivery.com/api/v1/packages/json/?waybill=${awb}`, {
@@ -187,16 +251,16 @@ const getTracking = async (awb) => {
   });
 };
 
-// ---------- Jira (comments, transitions, updates) ----------
+/**
+ * ---------------- Jira (comments, transitions, updates) ----------------
+ */
 const postCommentADF = async (issueKey, commentText) => {
   if (!commentText) return;
   const payload = {
     body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: commentText }] }] }
   };
   try {
-    await axios.post(`${jiraBase()}/rest/api/3/issue/${issueKey}/comment`, payload, {
-      auth: jiraAuth
-    });
+    await axios.post(`${jiraBase()}/rest/api/3/issue/${issueKey}/comment`, payload, { auth: jiraAuth });
     console.log(`💬 Comment added to ${issueKey}`);
   } catch (err) {
     console.error(`❌ Failed to add comment to ${issueKey}:`, err.response?.data || err.message);
@@ -208,7 +272,7 @@ const findTransitionByName = (transitions, target) => {
   const exact = transitions.find(t => targets.includes(nameNorm(t.to?.name)));
   if (exact) return exact;
 
-  // Fuzzy fallback: for RTO we accept any status containing both "rto" and "transit"
+  // Fuzzy fallback for RTO-in-transit
   const targetNorm = nameNorm(target);
   if (targetNorm.includes('rtointransit')) {
     const fuzzy = transitions.find(t => {
@@ -222,10 +286,7 @@ const findTransitionByName = (transitions, target) => {
 
 const updateJira = async (issueKey, newStatus, customFields = {}, comment = null) => {
   try {
-    const transitionRes = await axios.get(`${jiraBase()}/rest/api/3/issue/${issueKey}/transitions`, {
-      auth: jiraAuth
-    });
-
+    const transitionRes = await axios.get(`${jiraBase()}/rest/api/3/issue/${issueKey}/transitions`, { auth: jiraAuth });
     if (LOG_TRANSITIONS) {
       console.log(`🔎 Transitions for ${issueKey}:`, transitionRes.data.transitions.map(t => t.to?.name));
     }
@@ -233,8 +294,13 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
     const transition = findTransitionByName(transitionRes.data.transitions, newStatus);
 
     if (!transition) {
-      console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}. Available: ${JSON.stringify(transitionRes.data.transitions.map(t => t.to?.name))}`);
-      return; // bail early — don’t write fields/comments if we didn’t move
+      console.log(`⚠️ No matching transition for "${newStatus}" on ${issueKey}. Applying fields-only update.`);
+      if (Object.keys(customFields).length > 0) {
+        await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields: customFields }, { auth: jiraAuth });
+        console.log(`📝 Fields updated for ${issueKey} (no transition available)`);
+      }
+      if (comment) await postCommentADF(issueKey, `[Note] Intended status "${newStatus}" but no transition was available. ${comment}`);
+      return;
     }
 
     await axios.post(`${jiraBase()}/rest/api/3/issue/${issueKey}/transitions`, {
@@ -244,9 +310,7 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
     console.log(`✅ Status updated to "${newStatus}" for ${issueKey}`);
 
     if (Object.keys(customFields).length > 0) {
-      await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields: customFields }, {
-        auth: jiraAuth
-      });
+      await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields: customFields }, { auth: jiraAuth });
       console.log(`🛠️ Custom fields updated for ${issueKey}`);
     }
 
@@ -257,9 +321,7 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
       console.log(`👤 Assigned ${issueKey} to post-delivery assignee`);
     }
 
-    if (comment) {
-      await postCommentADF(issueKey, comment); // keep your original status comment
-    }
+    if (comment) await postCommentADF(issueKey, comment);
 
   } catch (err) {
     console.error(`❌ Failed to update JIRA ${issueKey}:`, err.response?.data || err.message);
@@ -270,16 +332,16 @@ const updateJira = async (issueKey, newStatus, customFields = {}, comment = null
 const updateJiraFieldsOnly = async (issueKey, fields) => {
   if (!fields || Object.keys(fields).length === 0) return;
   try {
-    await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields }, {
-      auth: jiraAuth
-    });
+    await axios.put(`${jiraBase()}/rest/api/3/issue/${issueKey}`, { fields }, { auth: jiraAuth });
     console.log(`📝 Fields updated for ${issueKey} (no transition)`);
   } catch (err) {
     console.error(`❌ Failed to update fields for ${issueKey}:`, err.response?.data || err.message);
   }
 };
 
-// ---------- Classification helpers ----------
+/**
+ * ---------------- Classification helpers ----------------
+ */
 const hasRecentRTScan = (tracking, lookback = 8) => {
   const scans = Array.isArray(tracking?.Scans) ? tracking.Scans : [];
   return scans.slice(-lookback).some(x => (x?.ScanDetail?.ScanType || '').toUpperCase() === 'RT');
@@ -318,19 +380,30 @@ const isReturnFlow = (t) => {
   );
 };
 
+/**
+ * ---------------- FIXED: interpretStatus ----------------
+ * Delivered must outrank earlier RTO-in-transit signals.
+ */
 const interpretStatus = (t) => {
   const s = t?.Status || {};
   const status = (s.Status || '').trim();
   const instructions = (s.Instructions || '').toLowerCase();
 
-  // 1) Terminal RTO first
+  // 1) Terminal RTO
   if (hasTerminalRTO(t)) return 'RTO DELIVERED';
 
-  // 2) Return leg next (RTO in transit)
-  if (isReturnFlow(t)) return 'RTO IN - TRANSIT';
+  // 2) Forward terminal (deliveries win over earlier return-flow starts)
+  if (
+    t.DeliveryDate ||
+    (String(s.StatusType || s.ScanType || '').toUpperCase() === 'DL') ||
+    /delivered/i.test(status) ||
+    /delivered/i.test(instructions)
+  ) {
+    return 'DELIVERED';
+  }
 
-  // 3) Forward terminal
-  if (t.DeliveryDate) return 'DELIVERED';
+  // 3) Return leg
+  if (isReturnFlow(t)) return 'RTO IN - TRANSIT';
 
   // 4) Heuristics (forward)
   if (instructions.includes('consignee will collect')) return 'IN - TRANSIT';
@@ -351,7 +424,7 @@ const interpretStatus = (t) => {
   if (instructions.includes("shipment picked up")) return 'IN - TRANSIT';
   if (instructions.includes('payment mode / amt dispute')) return 'IN - TRANSIT';
 
-  // 5) Heuristics implying RTO (centralized)
+  // 5) Heuristics implying RTO
   if (VERIFIED_CXL_RE.test(instructions)) return 'RTO IN - TRANSIT';
   if (instructions.includes('dispatched for rto')) return 'RTO IN - TRANSIT';
   if (instructions.includes('return accepted')) return 'RTO DELIVERED';
@@ -370,7 +443,9 @@ const interpretStatus = (t) => {
   return STATUS_MAP[status] || null;
 };
 
-// ---------- Field updates ----------
+/**
+ * ---------------- Field updates ----------------
+ */
 const buildDateUpdates = (issue, t, updatedStatus) => {
   const out = {};
   const fmt = (d) => dayjs(d).format('YYYY-MM-DD');
@@ -397,21 +472,16 @@ const buildDateUpdates = (issue, t, updatedStatus) => {
   return out;
 };
 
-// ---------- Latest instruction helpers ----------
 const getLatestInstruction = (t) => {
   if (!t) return null;
-
-  // Prefer top-level Status.Instructions (usually latest)
   const statusIns = t.Status?.Instructions && String(t.Status.Instructions).trim();
   const statusWhen = t.Status?.StatusDateTime || t.DeliveryDate || t.DestRecieveDate || null;
   const statusWhere = t.Status?.StatusLocation || null;
   const statusCode = t.Status?.StatusCode || null;
 
-  if (statusIns) {
-    return { instruction: statusIns, when: statusWhen, where: statusWhere, code: statusCode };
-  }
+  if (statusIns) return { instruction: statusIns, when: statusWhen, where: statusWhere, code: statusCode };
 
-  // Fallback to most recent scan’s instruction/scan
+  // Fallback to most recent scan
   const scans = Array.isArray(t.Scans) ? t.Scans : [];
   const latest = scans
     .map(s => s?.ScanDetail || {})
@@ -427,17 +497,13 @@ const getLatestInstruction = (t) => {
   };
 };
 
-// Find the most relevant timestamp for an "Out for delivery" event
 const getOFDWhen = (tracking, latestIns) => {
-  // 1) If the *latest instruction* is OFD, use its timestamp
   if (latestIns && /out for delivery/i.test(latestIns.instruction || '') && latestIns.when) {
     return latestIns.when;
   }
-  // 2) If top-level status itself is OFD, prefer StatusDateTime
   if (/out for delivery/i.test(String(tracking?.Status?.Instructions || tracking?.Status?.Status || ''))) {
     if (tracking?.Status?.StatusDateTime) return tracking.Status.StatusDateTime;
   }
-  // 3) Search scans for the most recent OFD entry
   const scans = Array.isArray(tracking?.Scans) ? tracking.Scans : [];
   const ofdScan = scans
     .map(s => s?.ScanDetail || {})
@@ -445,11 +511,9 @@ const getOFDWhen = (tracking, latestIns) => {
     .sort((a, b) => new Date(b.ScanDateTime || 0) - new Date(a.ScanDateTime || 0))[0];
   if (ofdScan) return ofdScan.StatusDateTime || ofdScan.ScanDateTime;
 
-  // 4) Fallback to generic status time if present
   return tracking?.Status?.StatusDateTime || null;
 };
 
-// Find earliest "verified cancellation" based on the trigger list
 const findVerifiedCancellation = (t) => {
   const scans = Array.isArray(t?.Scans) ? t.Scans : [];
   const matches = scans
@@ -459,33 +523,16 @@ const findVerifiedCancellation = (t) => {
   return matches[0] || null;
 };
 
-// ---------- Jira issue search (ENHANCED) ----------
-const fetchAllIssues = async (jql) => {
-  const all = [];
-  const pageSize = 50; // Jira Cloud safe
-  let nextPageToken = null;
-
-  while (true) {
-    const data = await jiraSearchJQL({
-      jql,
-      nextPageToken,
-      maxResults: pageSize
-    });
-
-    const issues = data?.issues || [];
-    all.push(...issues);
-
-    // Enhanced pagination: stop when isLast or no token returned.
-    if (data?.isLast || !data?.nextPageToken || issues.length === 0) break;
-    nextPageToken = data.nextPageToken;
-  }
-  return all;
-};
-
-// ---------- JQL builders using cf[ID] for the tracking field ----------
+/**
+ * ---------------- JQL builders ----------------
+ */
 function buildTrackingCfExpr() {
   const cfExpr = toCfIdExpr(TRACKING_FIELD);
-  return cfExpr || `"Shipping Tracking Details"`; // fallback to display name if env missing
+  if (!cfExpr) {
+    console.error(`❌ TRACKING_FIELD "${TRACKING_FIELD}" must look like "customfield_12345" so we can build JQL cf[12345].`);
+    process.exit(1);
+  }
+  return cfExpr;
 }
 
 function buildJqlPickup(sinceYmd) {
@@ -510,13 +557,50 @@ function buildJqlOthers(sinceYmd) {
   return `${cond} ORDER BY updated DESC`;
 }
 
-// ---------- Issues ----------
+/**
+ * ---------------- Issues ----------------
+ */
+const fetchAllIssues = async (jql) => {
+  const all = [];
+  const pageSize = 50;
+  let nextPageToken = null;
+  let startAt = 0;
+
+  while (true) {
+    // Try enhanced first; if it falls back to classic, we use startAt pagination
+    const data = await jiraSearchJQL({ jql, nextPageToken, startAt, maxResults: pageSize, prefer: 'enhanced' });
+
+    const issues = data?.issues || [];
+    all.push(...issues);
+
+    // Enhanced pagination
+    if (data?.isLast && typeof data?.isLast !== 'undefined') break;
+    if (data?.nextPageToken) {
+      nextPageToken = data.nextPageToken;
+      if (issues.length === 0) break;
+      continue;
+    }
+
+    // Classic pagination fallback
+    if (typeof data?.startAt === 'number' && typeof data?.total === 'number') {
+      startAt = data.startAt + issues.length;
+      if (startAt >= data.total || issues.length === 0) break;
+      continue;
+    }
+
+    // If neither enhanced nor classic paging hints present, stop
+    if (!issues.length) break;
+    else break; // be safe
+  }
+  return all;
+};
+
 const getJiraIssues = async () => {
   const since = dayjs().subtract(CREATED_SINCE_DAYS, 'day').format('YYYY-MM-DD');
 
   if (DEBUG_ISSUE_KEY) {
-    const single = await fetchAllIssues(`key = ${DEBUG_ISSUE_KEY}`);
-    return single;
+    const singleData = await jiraSearchJQL({ jql: `key = ${DEBUG_ISSUE_KEY}`, startAt: 0, maxResults: 50 });
+    return singleData?.issues || [];
   }
 
   console.log('📥 Fetching PICKUP SCHEDULED issues...');
@@ -528,7 +612,9 @@ const getJiraIssues = async () => {
   return [...pickupIssues, ...otherIssues];
 };
 
-// ---------- Main ----------
+/**
+ * ---------------- Main ----------------
+ */
 const run = async () => {
   console.log(`🔄 Sync started at ${new Date().toISOString()}`);
   const issues = await getJiraIssues();
@@ -558,7 +644,7 @@ const run = async () => {
         continue;
       }
 
-      // Classify
+      // Classify (with fixes)
       const updatedStatus = interpretStatus(tracking);
       console.log(
         `[decision] ${issue.key} awb=${awb} cur="${currentStatus}" -> new="${updatedStatus}" ` +
@@ -571,13 +657,13 @@ const run = async () => {
         continue;
       }
 
-      // Always prepare possible field updates (dates + latest instruction) BEFORE the skip check
+      // Prepare field updates BEFORE skip check
       let customFields = buildDateUpdates(issue, tracking, updatedStatus);
 
-      // === Promised Delivery Date (one-time, forward) ===
+      // Promised Delivery Date (write-once, forward)
       const existingPDD = issue.fields?.[PROMISED_DELIVERY_DATE_FIELD];
       if (!existingPDD) {
-        const rawPDD = tracking?.PromisedDeliveryDate; // e.g., "2025-09-14T23:59:59"
+        const rawPDD = tracking?.PromisedDeliveryDate;
         if (rawPDD) {
           const pdd = dayjs(rawPDD).isValid() ? dayjs(rawPDD).format('YYYY-MM-DD') : null;
           if (pdd) {
@@ -589,18 +675,15 @@ const run = async () => {
         console.log(`🗓️ Promised Delivery Date already set for ${issue.key} (${existingPDD}); not overwriting.`);
       }
 
-      // === Latest PDD (overwrite allowed, forward) ===
+      // Latest PDD (overwrite allowed, forward)
       const rawLatestPDD = tracking?.ExpectedDeliveryDate || tracking?.PromisedDeliveryDate || null;
       if (rawLatestPDD) {
         const newPdd = dayjs(rawLatestPDD).isValid() ? dayjs(rawLatestPDD).format('YYYY-MM-DD') : null;
         const currentPdd = issue.fields?.[LATEST_PDD_FIELD] || null;
         if (newPdd && newPdd !== currentPdd) {
           customFields[LATEST_PDD_FIELD] = newPdd;
-          if (currentPdd) {
-            console.log(`🗓️ Latest PDD updated for ${issue.key}: ${currentPdd} -> ${newPdd}`);
-          } else {
-            console.log(`🗓️ Latest PDD set for ${issue.key}: ${newPdd}`);
-          }
+          if (currentPdd) console.log(`🗓️ Latest PDD updated for ${issue.key}: ${currentPdd} -> ${newPdd}`);
+          else console.log(`🗓️ Latest PDD set for ${issue.key}: ${newPdd}`);
         } else if (newPdd && newPdd === currentPdd) {
           console.log(`🗓️ Latest PDD unchanged for ${issue.key}: ${currentPdd}`);
         }
@@ -608,9 +691,9 @@ const run = async () => {
         console.log(`🗓️ No forward PDD present in payload for ${issue.key}; skipping Latest PDD.`);
       }
 
-      // === RTO Reason & Initiated Date (write-once) ===
+      // FIXED: Only write RTO reason/initiated date if final status is RTO
       const cancelEvent = findVerifiedCancellation(tracking);
-      if (cancelEvent) {
+      if (cancelEvent && (updatedStatus === 'RTO IN - TRANSIT' || updatedStatus === 'RTO DELIVERED')) {
         const reasonText = String(cancelEvent.Instructions || '').trim();
         const when = cancelEvent.StatusDateTime || cancelEvent.ScanDateTime;
         const dateYmd = when ? dayjs(when).format('YYYY-MM-DD') : null;
@@ -632,10 +715,14 @@ const run = async () => {
           console.log(`📅 RTO Initiated Date already set for ${issue.key} (${currentRtoDate}); not overwriting.`);
         }
       } else {
-        console.log(`ℹ️ No verified cancellation match found for ${issue.key}`);
+        if (cancelEvent) {
+          console.log(`ℹ️ Verified cancellation exists but final status is "${updatedStatus}". Not writing RTO fields.`);
+        } else {
+          console.log(`ℹ️ No verified cancellation match for ${issue.key}`);
+        }
       }
 
-      // Grab the most recent instruction (prefers top-level Status.Instructions)
+      // Latest instruction (short)
       const latestIns = getLatestInstruction(tracking);
       if (latestIns) {
         const instrOnly = latestIns.instruction || '';
@@ -649,7 +736,7 @@ const run = async () => {
           console.log(`ℹ️ Instruction computed empty for ${issue.key}`);
         }
 
-        // === Out for Delivery Date (one-time) — from INSTRUCTION
+        // Out for Delivery Date (write-once) — from INSTRUCTION
         const existingOFD = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD];
         if (!existingOFD && /out for delivery/i.test(instrOnly)) {
           const whenFromInstr = getOFDWhen(tracking, latestIns);
@@ -667,7 +754,7 @@ const run = async () => {
         console.log(`ℹ️ No instruction found in payload for ${issue.key}`);
       }
 
-      // === Out for Delivery Date (one-time) — from STATUS fallback
+      // Out for Delivery Date (write-once) — from STATUS fallback
       const existingOFD2 = issue.fields?.[OUT_FOR_DELIVERY_DATE_FIELD];
       if (!existingOFD2 && updatedStatus === 'OUT FOR DELIVERY') {
         const whenFromStatus = getOFDWhen(tracking, latestIns);
@@ -682,7 +769,7 @@ const run = async () => {
         console.log(`🚚 Out-for-delivery date already set for ${issue.key} (${existingOFD2}); not overwriting.`);
       }
 
-      // If status is unchanged, only push field updates (if any), then skip transition
+      // If status unchanged → fields-only
       if (currentStatus && nameNorm(currentStatus) === nameNorm(updatedStatus)) {
         if (Object.keys(customFields).length > 0) {
           await updateJiraFieldsOnly(issue.key, customFields);
