@@ -414,6 +414,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('arriving today')) return 'IN - TRANSIT';
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
   if (instructions.includes('package found in audit')) return 'IN - TRANSIT';
+  if (instructions.includes('unexpected scan')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark verified')) return 'IN - TRANSIT';
   if (instructions.includes("reattempt as per client's instruction")) return 'IN - TRANSIT';
   if (instructions.includes("center changed by system")) return 'IN - TRANSIT';
