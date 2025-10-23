@@ -412,6 +412,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('consignee unavailable')) return 'IN - TRANSIT';
   if (instructions.includes('agent remark incorrect')) return 'IN - TRANSIT';
   if (instructions.includes('unlock')) return 'IN - TRANSIT';
+  if (instructions.includes('regional holiday')) return 'IN - TRANSIT';
   if (instructions.includes('arriving today')) return 'IN - TRANSIT';
   if (instructions.includes('office/institute closed')) return 'IN - TRANSIT';
   if (instructions.includes('package found in audit')) return 'IN - TRANSIT';
