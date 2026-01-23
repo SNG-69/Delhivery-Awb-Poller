@@ -429,7 +429,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('payment mode / amt dispute')) return 'IN - TRANSIT';
 
   // 5) Heuristics implying RTO
-  if (VERIFIED_CXL_RE.test(instructions)) return 'RTO IN - TRANSIT';
+  if (VERIFIED_CXL_RE.test(instructions)) return 'NDR';
   if (instructions.includes('dispatched for rto')) return 'RTO IN - TRANSIT';
   if (instructions.includes('return accepted')) return 'RTO DELIVERED';
   if (instructions.includes('not attempted')) return 'NDR';
