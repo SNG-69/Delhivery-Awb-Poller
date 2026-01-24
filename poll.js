@@ -439,7 +439,7 @@ const interpretStatus = (t) => {
   if (instructions.includes('delivery rescheduled by customer')) return 'IN - TRANSIT';
   if (instructions.includes('delayed due to weather conditions')) return 'IN - TRANSIT';
   if (instructions.includes('natural disaster')) return 'IN - TRANSIT';
-  if (instructions.includes('ntd updated')) return 'RTO IN - TRANSIT';
+  if (instructions.includes('ntd updated')) return 'NDR';
   if (instructions.includes('returned as per security instruction')) return 'RTO IN - TRANSIT';
   if (instructions.includes('recipient unavailable.establishment closed')) return 'RTO IN - TRANSIT';
 
